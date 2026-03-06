@@ -3,7 +3,7 @@ using Unity.Entities;
 
 namespace ZG
 {
-    [BurstCompile, WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation)]
+    [BurstCompile, WorldSystemFilter(WorldSystemFilterFlags.ServerSimulation |  WorldSystemFilterFlags.Default)]
     public partial struct NetworkRelayServerSystem : ISystem
     {
         public static readonly int InnerloopBatchCount = 4;

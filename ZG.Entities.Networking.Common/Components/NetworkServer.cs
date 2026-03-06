@@ -32,7 +32,7 @@ namespace ZG
 
         void Disconnect(NetworkServerSendBufferWrapper sendBuffer);
 
-        void Read(DataStreamReader reader,
+        void Read(ref DataStreamReader reader,
             NetworkServerSendBufferWrapper sendBuffer);
     }
 
@@ -142,10 +142,10 @@ namespace ZG
 
             bool isEmpty = false;
             NetworkEvent.Type cmd;
-            DataStreamReader stream;
+            DataStreamReader reader;
             do
             {
-                cmd = driver.PopEventForConnection(connection, out stream);
+                cmd = driver.PopEventForConnection(connection, out reader);
                 switch (cmd)
                 {
                     case NetworkEvent.Type.Empty:
@@ -153,21 +153,21 @@ namespace ZG
                         break;
                     case NetworkEvent.Type.Data:
                         int messageSize;
-                        DataStreamReader reader;
                         do
                         {
-                            messageSize = stream.ReadUShort();
-                            unsafe
+                            messageSize = reader.ReadUShort();
+                            /*unsafe
                             {
                                 reader = new DataStreamReader(
                                     CollectionHelper.ConvertExistingDataToNativeArray<byte>(
                                         (byte*)stream.GetUnsafeReadOnlyPtr() + stream.GetBytesRead(), 
                                         messageSize, 
-                                        Allocator.None));
-                            }
+                                        Allocator.None, 
+                                        true));
+                            }*/
 
-                            handler.Read(reader, sendBuffer);
-                        } while (stream.GetBytesRead() < stream.Length);
+                            handler.Read(ref reader, sendBuffer);
+                        } while (reader.GetBytesRead() < reader.Length);
 
                         break;
                     case NetworkEvent.Type.Connect:
@@ -176,14 +176,14 @@ namespace ZG
                         break;
                     case NetworkEvent.Type.Disconnect:
 
-                        __LogDisconnectReason(connection, (DisconnectReason)stream.ReadByte());
+                        __LogDisconnectReason(connection, (DisconnectReason)reader.ReadByte());
 
                         handler.Disconnect(sendBuffer);
 
                         connectionsToDisconnect.AddNoResize(connection);
                         break;
                 }
-            } while (isEmpty);
+            } while (!isEmpty);
         }
 
         private void __LogDisconnectReason(in NetworkConnection connection, DisconnectReason disconnectReason)
@@ -314,7 +314,7 @@ namespace ZG
             private NativeHashMap<NetworkConnection, int> __channelIndices;
 
             [ReadOnly]
-            private NativeArray<Pipeline> __pipelines;
+            private NativeList<Pipeline> __pipelines;
 
             [NativeDisableParallelForRestriction]
             private NativeArray<NetworkSendBuffer> __buffers;
@@ -326,7 +326,7 @@ namespace ZG
             {
                 __indices = buffer.__indices;
                 __channelIndices = buffer.__channelIndices;
-                __pipelines = buffer.__pipelines.AsArray();
+                __pipelines = buffer.__pipelines;
                 __buffers = buffer.__buffers.AsDeferredJobArray();
                 __channels = buffer.__channels.AsDeferredJobArray();
             }
@@ -714,11 +714,34 @@ namespace ZG
         public void Dispose()
         {
             __driver.Dispose();
+            __connections.Dispose();
+            __connectionsToDisconnect.Dispose();
         }
 
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
         {
             return __driver.CreatePipeline(stages);
+        }
+
+        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        {
+            NetworkEndpoint endpoint;
+            switch(family)
+            {
+                case NetworkFamily.Ipv4:
+                    endpoint = NetworkEndpoint.AnyIpv4;// The local address to which the client will connect to is 127.0.0.1
+                    break;
+                case NetworkFamily.Ipv6:
+                    endpoint = NetworkEndpoint.AnyIpv6;
+                    break;
+                default:
+                    endpoint = default;
+                    break;
+            }
+
+            endpoint.Port = port;
+            if (__driver.Bind(endpoint) != 0 || __driver.Listen() != 0)
+                UnityEngine.Debug.LogError($"Failed to bind to port {port}");
         }
 
         public void Disconnect(in NetworkConnection connection)

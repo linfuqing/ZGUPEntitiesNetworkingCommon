@@ -3,6 +3,7 @@ using Unity.Jobs;
 using Unity.Burst;
 using Unity.Entities;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
@@ -10,7 +11,7 @@ using Unity.Networking.Transport.Error;
 namespace ZG
 {
 
-    public enum NetworkClientType
+    public enum NetworkClientMessageType
     {
         Data, 
         Connect, 
@@ -19,6 +20,38 @@ namespace ZG
 
     public struct NetworkClientSendBuffer : IComponentData
     {
+        public struct ParallelWriter
+        {
+            [NativeDisableParallelForRestriction]
+            private NativeArray<NetworkSendBuffer> __buffers;
+
+            public ParallelWriter(ref NetworkClientSendBuffer buffer)
+            {
+                __buffers = buffer.__buffers.AsDeferredJobArray();
+            }
+            
+            public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
+            {
+                var buffer = __buffers[pipelineIndex];
+                bool result = buffer.BeginWrite(out writer, capacity);
+
+                writer.m_SendHandleData = (IntPtr)pipelineIndex;
+
+                __buffers[pipelineIndex] = buffer;
+
+                return result;
+            }
+
+            public void EndWrite(in DataStreamWriter writer)
+            {
+                int pipelineIndex = (int)writer.m_SendHandleData;
+                var buffer = __buffers[pipelineIndex];
+                buffer.EndWrite(writer);
+                __buffers[pipelineIndex] = buffer;
+            }
+
+        }
+        
         [ReadOnly]
         private NativeList<NetworkPipeline> __pipelines;
         private NativeList<NetworkSendBuffer> __buffers;
@@ -55,6 +88,16 @@ namespace ZG
             }
         }
 
+        public ParallelWriter AsParallelWriter()
+        {
+            return new ParallelWriter(ref this);
+        }
+
+        public NetworkPipeline GetPipeline(int pipelineIndex)
+        {
+            return  __pipelines[pipelineIndex];
+        }
+
         public int CreatePipeline(in NetworkPipeline pipeline)
         {
             int result = __pipelines.Length;
@@ -88,7 +131,7 @@ namespace ZG
         }
     }
     
-    public struct NetworkClient : IComponentData
+    public struct NetworkClient
     {
         private struct Header
         {
@@ -98,9 +141,14 @@ namespace ZG
 
         public struct Message : IComparable<Message>
         {
-            public NetworkClientType type;
+            public NetworkClientMessageType type;
             public int offset;
             public int size;
+
+            public DataStreamReader Read(in NativeArray<byte> buffer)
+            {
+                return new DataStreamReader(buffer.GetSubArray(offset, size));
+            }
 
             public int CompareTo(Message other)
             {
@@ -159,7 +207,7 @@ namespace ZG
                             isEmpty = true;
                             break;
                         case NetworkEvent.Type.Data:
-                            message.type = NetworkClientType.Data;
+                            message.type = NetworkClientMessageType.Data;
                             
                             do
                             {
@@ -174,7 +222,7 @@ namespace ZG
                         case NetworkEvent.Type.Connect:
                             isConnected = true;
 
-                            message.type = NetworkClientType.Connect;
+                            message.type = NetworkClientMessageType.Connect;
                             message.size = 0;
 
                             messages.Add(pipeline, message);
@@ -186,16 +234,16 @@ namespace ZG
 
                             header.connection = driver.Connect(header.endpoint);
 
-                            var connections = headers.Reinterpret<NetworkConnection>();
+                            var connections = headers.Reinterpret<NetworkConnection>(UnsafeUtility.SizeOf<Header>());
                             connections[0] = header.connection;
                             
-                            message.type = NetworkClientType.Disconnect;
+                            message.type = NetworkClientMessageType.Disconnect;
                             message.size = 0;
 
                             messages.Add(pipeline, message);
                             break;
                     }
-                } while (isEmpty);
+                } while (!isEmpty);
 
                 if (isConnected)
                 {
@@ -206,7 +254,112 @@ namespace ZG
 
             private void __LogDisconnectReason(DisconnectReason disconnectReason)
             {
-                UnityEngine.Debug.LogError($"DisconnectReason: {(int)disconnectReason}");
+                UnityEngine.Debug.LogError($"DisconnectReason: {disconnectReason}");
+            }
+        }
+
+        public struct MessageIterator : IDisposable
+        {
+            public struct Element
+            {
+                private Message __message;
+                
+                private NativeList<byte> __buffer;
+                
+                public NetworkClientMessageType type => __message.type;
+
+                public DataStreamReader reader => __message.Read(__buffer.AsArray());
+
+                internal Element(in Message message, in NativeList<byte> buffer)
+                {
+                    __message = message;
+                    __buffer = buffer;
+                }
+            }
+
+            private bool __isCreatePipelines;
+            private int __resultIndex;
+            private int __pipelineIndex;
+            private NativeArray<NetworkPipeline> __pipelines;
+            private NativeList<Message> __results;
+            private NativeList<byte> __buffer;
+            private NativeParallelMultiHashMap<NetworkPipeline, Message> __messages;
+
+            public Element Current => new Element(__results[__resultIndex], __buffer);
+
+            public MessageIterator(in Messages messages, in AllocatorManager.AllocatorHandle allocator)
+            {
+                __isCreatePipelines = true;
+                __resultIndex = -1;
+                __pipelineIndex = -1;
+                __pipelines = messages._values.GetKeyArray(allocator);
+                __results = new NativeList<Message>(allocator);
+                __buffer = messages._buffer;
+                __messages = messages._values;
+            }
+            
+            public MessageIterator(in NativeArray<NetworkPipeline> pipelines, in Messages messages, in AllocatorManager.AllocatorHandle allocator)
+            {
+                __isCreatePipelines = false;
+                __resultIndex = -1;
+                __pipelineIndex = -1;
+                __pipelines = pipelines;
+                __results = new NativeList<Message>(allocator);
+                __buffer = messages._buffer;
+                __messages = messages._values;
+            }
+
+            public void Dispose()
+            {
+                if(__isCreatePipelines)
+                    __pipelines.Dispose();
+                
+                __results.Dispose();
+            }
+
+            public bool MoveNext()
+            {
+                if (++__resultIndex >= __results.Length)
+                {
+                    while (++__pipelineIndex < __pipelines.Length)
+                    {
+                        __results.Clear();
+                        
+                        foreach (var message in __messages.GetValuesForKey(__pipelines[__pipelineIndex]))
+                            __results.Add(message);
+
+                        if (!__results.IsEmpty)
+                        {
+                            __results.Sort();
+
+                            break;
+                        }
+                    }
+
+                    if (__pipelineIndex < __pipelines.Length)
+                        __resultIndex = 0;
+                    else
+                        return false;
+                }
+
+                return true;
+            }
+        }
+
+        public struct Messages
+        {
+            internal NativeList<byte> _buffer;
+            internal NativeParallelMultiHashMap<NetworkPipeline, Message> _values;
+            
+            public Messages(in NetworkClient client)
+            {
+                _buffer = client.__buffer;
+                _values = client.__messages;
+            }
+
+            public MessageIterator CreateIterator(AllocatorManager.AllocatorHandle allocator)
+            {
+                return new MessageIterator(in this, allocator);
             }
         }
 
@@ -217,7 +370,7 @@ namespace ZG
 
         public NetworkConnection.State connectionState => __driver.GetConnectionState(connection);
 
-        public NetworkConnection connection => __headers.Reinterpret<NetworkConnection>()[0];
+        public NetworkConnection connection => __headers.Reinterpret<NetworkConnection>(UnsafeUtility.SizeOf<Header>())[0];
 
         public NetworkClient(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
@@ -233,6 +386,11 @@ namespace ZG
             __buffer.Dispose();
             __headers.Dispose();
             __messages.Dispose();
+        }
+
+        public Messages AsMessages()
+        {
+            return new Messages(this);
         }
 
         public void Shutdown()
@@ -258,6 +416,11 @@ namespace ZG
             return __driver.CreatePipeline(stages);
         }
 
+        public NetworkPipeline CreatePipeline(params Type[] stages)
+        {
+            return __driver.CreatePipeline(stages);
+        }
+        
         public void GetPipelines(ref NativeList<NetworkPipeline> pipelines)
         {
             NetworkPipeline pipeline;
@@ -311,6 +474,111 @@ namespace ZG
                 jobHandle = __driver.ScheduleFlushSend(jobHandle);
             
             return jobHandle;
+        }
+    }
+
+    public struct NetworkClientDriver : IComponentData
+    {
+        private NetworkClient __instance;
+        private NetworkClientSendBuffer __sendBuffer;
+        
+        public NetworkClientDriver(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
+        {
+            __instance = new NetworkClient(settings, allocator);
+            __sendBuffer = new NetworkClientSendBuffer(allocator);
+        }
+
+        public NetworkClientDriver(
+            AllocatorManager.AllocatorHandle allocator, 
+            int connectTimeoutMS, 
+            int maxConnectAttempts, 
+            int disconnectTimeoutMS = 30 * 1000, 
+            int heartbeatTimeoutMS = 500, 
+            int reconnectionTimeoutMS = 2000, 
+            int maxFrameTimeMS = 0, 
+            int fixedFrameTimeMS = 0, 
+            int receiveQueueCapacity = 4096, 
+            int sendQueueCapacity = 4096)
+        {
+            var settings = new NetworkSettings(Allocator.Temp);
+
+            settings.WithNetworkConfigParameters(
+                connectTimeoutMS,
+                maxConnectAttempts,
+                disconnectTimeoutMS,
+                heartbeatTimeoutMS,
+                reconnectionTimeoutMS,
+                maxFrameTimeMS,
+                fixedFrameTimeMS,
+                receiveQueueCapacity,
+                sendQueueCapacity);
+            
+            __instance = new NetworkClient(settings, allocator);
+            __sendBuffer = new NetworkClientSendBuffer(allocator);
+            
+            settings.Dispose();
+        }
+
+        public void Dispose()
+        {
+            __instance.Dispose();
+            __sendBuffer.Dispose();
+        }
+        
+        public NetworkClient.Messages AsMessages() => __instance.AsMessages();
+
+        public void Connect(in NetworkEndpoint endPoint)
+        {
+            __instance.Connect(endPoint);
+        }
+
+        public bool Connect(string address, ushort port)
+        {
+            if (NetworkEndpoint.TryParse(address, port, out var endpoint))
+            {
+                Connect(endpoint);
+
+                return true;
+            }
+
+            return false;
+        }
+
+        public int CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
+        {
+            var pipeline = __instance.CreatePipeline(stages);
+            
+            return __sendBuffer.CreatePipeline(pipeline);
+        }
+        
+        public int CreatePipeline(in NativeArray<NetworkPipelineStage> stages)
+        {
+            using var stageIDs = stages.ToPipelineStageIDs(Allocator.Temp);
+            var pipeline = __instance.CreatePipeline(stageIDs);
+            
+            return __sendBuffer.CreatePipeline(pipeline);
+        }
+
+        public int CreatePipeline(int pipelineIndex)
+        {
+            var pipeline = __sendBuffer.GetPipeline(pipelineIndex);
+            
+            return __sendBuffer.CreatePipeline(pipeline);
+        }
+
+        public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
+        {
+            return __sendBuffer.BeginWrite(pipelineIndex, out writer, capacity);
+        }
+
+        public void EndWrite(in DataStreamWriter writer)
+        {
+            __sendBuffer.EndWrite(writer);
+        }
+
+        public JobHandle Schedule(in JobHandle inputDeps)
+        {
+            return __instance.Schedule(ref __sendBuffer, inputDeps);
         }
     }
 }

@@ -12,23 +12,6 @@ using ZG;
 
 namespace ZG
 {
-
-    public enum NetworkRelayMessageType
-    {
-        Init,
-        Create,
-        Join,
-        Leave,
-        Query
-    }
-
-    public enum NetworkRelayType
-    {
-        All,
-        Channel,
-        Identity
-    }
-
     public struct NetworkRelayServerIdentity
     {
         private int __channel;
@@ -212,11 +195,14 @@ namespace ZG
         public int pipelineIndexSendOthersFromChannel;
         public int pipelineIndexCustom;
 
-        [ReadOnly] public NativeHashMap<NetworkConnection, int> identityIndices;
+        [ReadOnly] 
+        public NativeHashMap<NetworkConnection, int> identityIndices;
 
-        [NativeDisableParallelForRestriction] public NativeArray<NetworkRelayServerIdentity> identities;
+        [NativeDisableParallelForRestriction] 
+        public NativeArray<NetworkRelayServerIdentity> identities;
 
-        [NativeDisableParallelForRestriction] public NativeArray<int> identityCount;
+        [NativeDisableParallelForRestriction] 
+        public NativeArray<int> identityCount;
 
         public void Connect(NetworkServerSendBufferWrapper sendBuffer)
         {
@@ -236,7 +222,7 @@ namespace ZG
             identities[identityIndex] = identity;
         }
 
-        public void Read(DataStreamReader reader,
+        public void Read(ref DataStreamReader reader,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             var identityIndex = identityIndices[sendBuffer.Connection];
@@ -324,7 +310,8 @@ namespace ZG
 
     public struct NetworkRelayServerBufferHandler : INetworkServerBufferHandler
     {
-        [ReadOnly] public NativeHashMap<NetworkConnection, int> identityIndices;
+        [ReadOnly] 
+        public NativeHashMap<NetworkConnection, int> identityIndices;
 
         public bool Apply(
             DataStreamReader reader,
@@ -416,6 +403,38 @@ namespace ZG
             __identityIndices = new NativeHashMap<NetworkConnection, int>(1, allocator);
         }
 
+        public NetworkRelayServer(
+            in NativeArray<NetworkPipelineStage> stages,
+            in AllocatorManager.AllocatorHandle allocator, 
+            int connectTimeoutMS, 
+            int maxConnectAttempts, 
+            int disconnectTimeoutMS = 30 * 1000, 
+            int heartbeatTimeoutMS = 500, 
+            int reconnectionTimeoutMS = 2000, 
+            int maxFrameTimeMS = 0, 
+            int fixedFrameTimeMS = 0, 
+            int receiveQueueCapacity = 4096, 
+            int sendQueueCapacity = 4096)
+        {
+            using (var stageIDs = stages.ToPipelineStageIDs(Allocator.Temp))
+            {
+                var settings = new NetworkSettings(Allocator.Temp);
+                settings.WithNetworkConfigParameters(
+                    connectTimeoutMS,
+                    maxConnectAttempts,
+                    disconnectTimeoutMS,
+                    heartbeatTimeoutMS,
+                    reconnectionTimeoutMS,
+                    maxFrameTimeMS,
+                    fixedFrameTimeMS,
+                    receiveQueueCapacity,
+                    sendQueueCapacity);
+
+                this = new NetworkRelayServer(settings, stageIDs, allocator);
+                settings.Dispose();
+            }
+        }
+
         public void Dispose()
         {
             __instance.Dispose();
@@ -424,6 +443,11 @@ namespace ZG
             __identityIndexPool.Dispose();
             __identities.Dispose();
             __identityIndices.Dispose();
+        }
+
+        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        {
+            __instance.Listen(port, family);
         }
 
         public void Disconnect(in NetworkConnection connection)

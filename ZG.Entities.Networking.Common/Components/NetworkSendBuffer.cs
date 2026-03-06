@@ -99,6 +99,9 @@ namespace ZG
 
                 __index = count + 1;
             }
+            
+            if(writer.IsCreated)
+                driver.EndSend(writer);
 
             Clear();
 

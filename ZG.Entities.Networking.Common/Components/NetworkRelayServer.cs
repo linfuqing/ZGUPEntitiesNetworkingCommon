@@ -1,0 +1,460 @@
+using Unity.Jobs;
+using Unity.Entities;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+using Unity.Networking.Transport;
+using Unity.Networking.Transport.Error;
+using ZG;
+
+[assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener>))]
+[assembly:RegisterGenericJobType(typeof(NetworkServerPopEventsJob<NetworkRelayServerHandler>))]
+[assembly:RegisterGenericJobType(typeof(NetworkServerSendJob<NetworkRelayServerBufferHandler>))]
+
+namespace ZG
+{
+
+    public enum NetworkRelayMessageType
+    {
+        Init,
+        Create,
+        Join,
+        Leave,
+        Query
+    }
+
+    public enum NetworkRelayType
+    {
+        All,
+        Channel,
+        Identity
+    }
+
+    public struct NetworkRelayServerIdentity
+    {
+        private int __channel;
+        private UnsafeList<byte> __bytes;
+
+        public int channel => __channel;
+
+        public static void SendRelay(
+            int type,
+            int relayType,
+            int identityIndex,
+            ref DataStreamReader reader,
+            ref DataStreamWriter writer)
+        {
+            var streamCompressionModel = StreamCompressionModel.Default;
+            writer.WritePackedInt(type, streamCompressionModel);
+            writer.WritePackedInt(relayType, streamCompressionModel);
+            writer.WritePackedInt(identityIndex, streamCompressionModel);
+
+            NativeArray<byte> bytes;
+            unsafe
+            {
+                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>(
+                    (byte*)reader.GetUnsafeReadOnlyPtr() + reader.GetBytesRead(),
+                    reader.Length, Allocator.None, true);
+            }
+
+            writer.WriteBytes(bytes);
+        }
+
+        public NetworkRelayServerIdentity(in AllocatorManager.AllocatorHandle allocator)
+        {
+            __channel = 0;
+            __bytes = new UnsafeList<byte>(1, allocator);
+        }
+
+        public void Dispose()
+        {
+            __bytes.Dispose();
+        }
+
+        public void Clear()
+        {
+            __channel = 0;
+            __bytes.Clear();
+        }
+
+        public void Init(ref DataStreamReader reader)
+        {
+            __bytes.Resize(reader.Length - reader.GetBytesRead(), NativeArrayOptions.UninitializedMemory);
+            reader.ReadBytes(AsArray());
+        }
+
+        public void SendHeader(
+            bool isSendOthers,
+            int pipelineIndex,
+            int type,
+            int identityIndex,
+            NetworkServerSendBufferWrapper sendBuffer)
+        {
+            if (sendBuffer.BeginWrite(pipelineIndex, out var writer))
+            {
+                __WriteHeader(isSendOthers, type, identityIndex, ref writer);
+
+                sendBuffer.EndWrite(writer);
+            }
+        }
+
+        public void Join(
+            int pipelineIndexToSelf,
+            int pipelineIndexToOthers,
+            int identityIndex,
+            int channel,
+            NetworkServerSendBufferWrapper sendBuffer)
+        {
+            if (!sendBuffer.AddChannel(channel))
+                return;
+
+            Leave(pipelineIndexToSelf, pipelineIndexToOthers, identityIndex, sendBuffer);
+
+            __channel = channel;
+
+            SendHeader(false, pipelineIndexToSelf, (int)NetworkRelayMessageType.Join, identityIndex, sendBuffer);
+            SendHeader(true, pipelineIndexToOthers, (int)NetworkRelayMessageType.Join, identityIndex, sendBuffer);
+        }
+
+        public void Leave(
+            int pipelineIndexToSelf,
+            int pipelineIndexToOthers,
+            int identityIndex,
+            NetworkServerSendBufferWrapper sendBuffer)
+        {
+            if (sendBuffer.RemoveChannel(__channel))
+            {
+                SendHeader(false, pipelineIndexToSelf, (int)NetworkRelayMessageType.Leave, identityIndex, sendBuffer);
+                SendHeader(true, pipelineIndexToOthers, (int)NetworkRelayMessageType.Leave, identityIndex, sendBuffer);
+            }
+
+            __channel = -1;
+        }
+
+        public void Relay(
+            int pipelineIndex,
+            int type,
+            int relayType,
+            int identityIndex,
+            ref DataStreamReader reader,
+            NetworkServerSendBufferWrapper sendBuffer)
+        {
+            if (sendBuffer.BeginWrite(pipelineIndex, out var writer))
+            {
+                SendRelay(type, relayType, identityIndex, ref reader, ref writer);
+
+                sendBuffer.EndWrite(writer);
+            }
+        }
+
+        public NativeArray<byte> AsArray()
+        {
+            NativeArray<byte> bytes;
+            unsafe
+            {
+                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>(__bytes.Ptr,
+                    __bytes.Length, Allocator.None, true);
+            }
+
+            return bytes;
+        }
+
+        private void __WriteHeader(bool isSendOthers, int type, int identityIndex, ref DataStreamWriter writer)
+        {
+            var streamCompressionModel = StreamCompressionModel.Default;
+            writer.WritePackedInt(type, streamCompressionModel);
+            writer.WritePackedInt(identityIndex, streamCompressionModel);
+            writer.WritePackedInt(__channel, streamCompressionModel);
+
+            if (isSendOthers)
+                writer.WriteBytes(AsArray());
+        }
+    }
+
+    public struct NetworkRelayServerListener : INetworkServerListener
+    {
+        public NativeHashMap<NetworkConnection, int> identityIndices;
+
+        public NativeList<NetworkRelayServerIdentity> identities;
+
+        public NativeList<int> identityIndexPool;
+
+        public void Connect(in NetworkConnection connection)
+        {
+            int index, length = identityIndexPool.Length;
+            if (length > 0)
+            {
+                index = identityIndexPool[--length];
+                identityIndexPool.ResizeUninitialized(length);
+
+                identities.ElementAt(index).Clear();
+            }
+            else
+            {
+                index = identities.Length;
+                identities.Add(new NetworkRelayServerIdentity(Allocator.Persistent));
+            }
+
+            identityIndices.Add(connection, index);
+        }
+
+        public void Disconnect(in NetworkConnection connection)
+        {
+            identityIndexPool.Add(identityIndices[connection]);
+
+            identityIndices.Remove(connection);
+        }
+    }
+
+    public struct NetworkRelayServerHandler : INetworkServerHandler
+    {
+        public int pipelineIndexSendSelf;
+        public int pipelineIndexSendOthers;
+        public int pipelineIndexSendOthersFromChannel;
+        public int pipelineIndexCustom;
+
+        [ReadOnly] public NativeHashMap<NetworkConnection, int> identityIndices;
+
+        [NativeDisableParallelForRestriction] public NativeArray<NetworkRelayServerIdentity> identities;
+
+        [NativeDisableParallelForRestriction] public NativeArray<int> identityCount;
+
+        public void Connect(NetworkServerSendBufferWrapper sendBuffer)
+        {
+            //sendBuffer.AddChannel(0);
+        }
+
+        public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
+        {
+            var identityIndex = identityIndices[sendBuffer.Connection];
+            var identity = identities[identityIndex];
+            identity.Leave(
+                pipelineIndexSendSelf,
+                pipelineIndexSendOthersFromChannel,
+                identityIndex,
+                sendBuffer);
+
+            identities[identityIndex] = identity;
+        }
+
+        public void Read(DataStreamReader reader,
+            NetworkServerSendBufferWrapper sendBuffer)
+        {
+            var identityIndex = identityIndices[sendBuffer.Connection];
+            var identity = identities[identityIndex];
+
+            var streamCompressionModel = StreamCompressionModel.Default;
+            int type = reader.ReadPackedInt(streamCompressionModel);
+            switch ((NetworkRelayMessageType)type)
+            {
+                case NetworkRelayMessageType.Init:
+                    identity.Init(ref reader);
+                    identities[identityIndex] = identity;
+
+                    if (sendBuffer.BeginWrite(pipelineIndexSendSelf, out var writer))
+                    {
+                        writer.WritePackedInt(type, streamCompressionModel);
+                        writer.WritePackedInt(identityIndex, streamCompressionModel);
+                        sendBuffer.EndWrite(writer);
+                    }
+
+                    break;
+                case NetworkRelayMessageType.Create:
+                    identity.Join(
+                        pipelineIndexSendSelf,
+                        pipelineIndexSendOthersFromChannel,
+                        identityIndex,
+                        System.Threading.Interlocked.Increment(ref identityCount.AsSpan()[0]),
+                        sendBuffer);
+
+                    identities[identityIndex] = identity;
+                    break;
+                case NetworkRelayMessageType.Join:
+                    identity.Join(
+                        pipelineIndexSendSelf,
+                        pipelineIndexSendOthersFromChannel,
+                        identityIndex,
+                        reader.ReadPackedInt(streamCompressionModel), sendBuffer);
+
+                    identities[identityIndex] = identity;
+
+                    break;
+                case NetworkRelayMessageType.Leave:
+                    identity.Leave(
+                        pipelineIndexSendSelf,
+                        pipelineIndexSendOthersFromChannel,
+                        identityIndex,
+                        sendBuffer);
+
+                    identities[identityIndex] = identity;
+                    break;
+                case NetworkRelayMessageType.Query:
+                    int channel = reader.ReadPackedInt(streamCompressionModel), numIdentities = identities.Length;
+                    for (int i = 0; i < numIdentities; ++i)
+                    {
+                        identity = identities[i];
+                        if (identity.channel != channel)
+                            continue;
+
+                        identity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Query, i,
+                            sendBuffer);
+                    }
+
+                    break;
+                default:
+                    int relayType = reader.ReadPackedInt(streamCompressionModel);
+                    switch ((NetworkRelayType)relayType)
+                    {
+                        case NetworkRelayType.All:
+                            identity.Relay(pipelineIndexSendOthers, type, relayType, identityIndex, ref reader,
+                                sendBuffer);
+                            break;
+                        case NetworkRelayType.Channel:
+                            identity.Relay(pipelineIndexSendOthersFromChannel, type, relayType, identityIndex,
+                                ref reader, sendBuffer);
+                            break;
+                        default:
+                            identity.Relay(pipelineIndexCustom, type, relayType, identityIndex, ref reader, sendBuffer);
+                            break;
+                    }
+
+                    break;
+            }
+        }
+    }
+
+    public struct NetworkRelayServerBufferHandler : INetworkServerBufferHandler
+    {
+        [ReadOnly] public NativeHashMap<NetworkConnection, int> identityIndices;
+
+        public bool Apply(
+            DataStreamReader reader,
+            in NetworkConnection source,
+            in NetworkConnection destination,
+            ref NetworkDriver.Concurrent driver)
+        {
+            var streamCompressionModel = StreamCompressionModel.Default;
+            int type = reader.ReadPackedInt(streamCompressionModel),
+                relayType = reader.ReadPackedInt(streamCompressionModel);
+
+            if (relayType >= (int)NetworkRelayType.Identity &&
+                identityIndices.TryGetValue(destination, out var identityIndex) &&
+                identityIndex == relayType)
+            {
+                int result = driver.BeginSend(destination, out var writer);
+                if (result < 0)
+                {
+                    NetworkSendBuffer.LogError((StatusCode)result);
+
+                    return false;
+                }
+
+                NetworkRelayServerIdentity.SendRelay(
+                    type,
+                    relayType,
+                    reader.ReadPackedInt(streamCompressionModel),
+                    ref reader, ref writer);
+
+                result = driver.EndSend(writer);
+                if (result < 0)
+                {
+                    NetworkSendBuffer.LogError((StatusCode)result);
+
+                    return false;
+                }
+
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    public struct NetworkRelayServer : IComponentData
+    {
+        private int __pipelineIndexSendSelf;
+        private int __pipelineIndexSendOthers;
+        private int __pipelineIndexSendOthersFromChannel;
+        private int __pipelineIndexCustom;
+
+        private NetworkServer __instance;
+        private NetworkServerSendBuffer __sendBuffer;
+
+        private NativeArray<int> __identityCount;
+
+        private NativeList<int> __identityIndexPool;
+
+        private NativeList<NetworkRelayServerIdentity> __identities;
+
+        private NativeHashMap<NetworkConnection, int> __identityIndices;
+
+        public NetworkRelayServer(
+            in NetworkSettings settings,
+            in NativeArray<NetworkPipelineStageId> stages,
+            in AllocatorManager.AllocatorHandle allocator)
+        {
+            __instance = new NetworkServer(settings, allocator);
+
+            __sendBuffer = new NetworkServerSendBuffer(allocator);
+
+            var pipeline = __instance.CreatePipeline(stages);
+
+            __pipelineIndexSendSelf = __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendSelf, pipeline);
+            __pipelineIndexSendOthers = __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendOthers, pipeline);
+            __pipelineIndexSendOthersFromChannel =
+                __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendOthersFromChannel, pipeline);
+            __pipelineIndexCustom = __sendBuffer.CreatePipeline(NetworkServerPipelineType.Custom, pipeline);
+            __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendSelfFromOthers, pipeline);
+
+            __identityCount = CollectionHelper.CreateNativeArray<int>(1, allocator);
+
+            __identityCount[0] = (int)NetworkRelayType.Identity;
+
+            __identityIndexPool = new NativeList<int>(allocator);
+
+            __identities = new NativeList<NetworkRelayServerIdentity>(allocator);
+
+            __identityIndices = new NativeHashMap<NetworkConnection, int>(1, allocator);
+        }
+
+        public void Dispose()
+        {
+            __instance.Dispose();
+            __sendBuffer.Dispose();
+            __identityCount.Dispose();
+            __identityIndexPool.Dispose();
+            __identities.Dispose();
+            __identityIndices.Dispose();
+        }
+
+        public void Disconnect(in NetworkConnection connection)
+        {
+            __instance.Disconnect(connection);
+        }
+
+        public JobHandle Schedule(
+            int innerloopBatchCount,
+            in JobHandle inputDeps)
+        {
+            NetworkRelayServerListener listener;
+            listener.identities = __identities;
+            listener.identityIndices = __identityIndices;
+            listener.identityIndexPool = __identityIndexPool;
+
+            NetworkRelayServerHandler handler;
+            handler.pipelineIndexSendSelf = __pipelineIndexSendSelf;
+            handler.pipelineIndexSendOthers = __pipelineIndexSendOthers;
+            handler.pipelineIndexSendOthersFromChannel = __pipelineIndexSendOthersFromChannel;
+            handler.pipelineIndexCustom = __pipelineIndexCustom;
+            handler.identities = __identities.AsDeferredJobArray();
+            handler.identityIndices = __identityIndices;
+            handler.identityCount = __identityCount;
+
+            NetworkRelayServerBufferHandler bufferHandler;
+            bufferHandler.identityIndices = __identityIndices;
+
+            return __instance.Schedule(ref listener, ref handler, ref bufferHandler, ref __sendBuffer,
+                innerloopBatchCount,
+                in inputDeps);
+        }
+    }
+}

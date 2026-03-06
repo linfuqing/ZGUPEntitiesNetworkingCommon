@@ -10,6 +10,7 @@ namespace ZG
         Create,
         Join,
         Leave,
+        Drop, 
         Query
     }
 

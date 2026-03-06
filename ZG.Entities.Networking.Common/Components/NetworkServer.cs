@@ -12,11 +12,11 @@ namespace ZG
 {
     public enum NetworkServerPipelineType
     {
+        SendSelfFromOthers, 
+        Custom, 
         SendOthers, 
         SendOthersFromChannel,
-        SendSelf, 
-        SendSelfFromOthers,
-        Custom
+        SendSelf
     }
 
     public interface INetworkServerListener
@@ -39,10 +39,12 @@ namespace ZG
     public interface INetworkServerBufferHandler
     {
         bool Apply(
+            int pipelineIndex, 
             DataStreamReader reader,
             in NetworkConnection source, 
             in NetworkConnection destination, 
-            ref NetworkDriver.Concurrent driver);
+            ref NetworkDriver.Concurrent driver, 
+            ref NetworkServerSendBuffer.Concurrent sendBuffer);
     }
 
     public struct NetworkServerSendBufferWrapper
@@ -165,8 +167,14 @@ namespace ZG
                                         Allocator.None, 
                                         true));
                             }*/
+                            using (var bytes = new NativeArray<byte>(messageSize, Allocator.Temp))
+                            {
+                                reader.ReadBytes(bytes);
 
-                            handler.Read(ref reader, sendBuffer);
+                                var stream = new DataStreamReader(bytes);
+                                
+                                handler.Read(ref stream, sendBuffer);
+                            }
                         } while (reader.GetBytesRead() < reader.Length);
 
                         break;
@@ -307,6 +315,16 @@ namespace ZG
 
         public struct Concurrent
         {
+            private struct Comparer : System.Collections.Generic.IComparer<Index>
+            {
+                public NativeList<Pipeline> pipelines;
+                
+                public int Compare(Index x, Index y)
+                {
+                    return pipelines[x.pipeline].type.CompareTo(pipelines[y.pipeline].type);
+                }
+            }
+            
             [ReadOnly]
             private NativeParallelMultiHashMap<NetworkConnection, Index> __indices;
             
@@ -401,7 +419,7 @@ namespace ZG
                 ref NetworkDriver.Concurrent driver, 
                 ref T handler) where T : INetworkServerBufferHandler
             {
-                Pipeline pipeline;
+                /*Pipeline pipeline;
                 NetworkSendBuffer buffer;
                 foreach (var index in __indices.GetValuesForKey(connection))
                 {
@@ -414,30 +432,79 @@ namespace ZG
                             __buffers[index.buffer] = buffer;
                             break;
                     }
-                }
+                }*/
 
                 Channel channel = __channels[__channelIndices[connection]], tempChannel;
-                Pipeline tempPipeline;
-                NetworkSendBuffer tempBuffer;
+                Pipeline pipeline, tempPipeline;
+                NetworkSendBuffer buffer, tempBuffer;
                 NetworkConnection tempConnection;
+                NativeList<Index> indices = default;
                 foreach (var channelIndex in __channelIndices)
                 {
                     tempChannel = __channels[channelIndex.Value];
-                    if(!tempChannel.Or(channel))
+                    if (!tempChannel.Or(channel))
                         continue;
 
                     tempConnection = channelIndex.Key;
 
+                    if (indices.IsCreated)
+                        indices.Clear();
+                    else
+                        indices = new NativeList<Index>(Allocator.Temp);
+                    
                     foreach (var index in __indices.GetValuesForKey(tempConnection))
+                        indices.Add(index);
+
+                    Comparer comparer;
+                    comparer.pipelines = __pipelines;
+                    indices.Sort(comparer);
+
+                    foreach (var index in indices)
                     {
                         pipeline = __pipelines[index.pipeline];
 
                         switch (pipeline.type)
                         {
+                            case NetworkServerPipelineType.Custom:
+                                buffer = __buffers[index.buffer];
+                                while (buffer.ReadNext(out var bytes))
+                                {
+                                    if (!handler.Apply(
+                                            index.pipeline,
+                                            new DataStreamReader(bytes),
+                                            tempConnection,
+                                            connection,
+                                            ref driver,
+                                            ref this))
+                                    {
+                                        foreach (var tempIndex in __indices.GetValuesForKey(connection))
+                                        {
+                                            tempPipeline = __pipelines[tempIndex.pipeline];
+                                            if (NetworkServerPipelineType.SendSelfFromOthers == tempPipeline.type &&
+                                                tempPipeline.value == pipeline.value)
+                                            {
+                                                tempBuffer = __buffers[tempIndex.buffer];
+                                                if (tempBuffer.BeginWrite(out var writer))
+                                                {
+                                                    writer.WriteBytes(bytes);
+
+                                                    tempBuffer.EndWrite(writer);
+
+                                                    __buffers[tempIndex.buffer] = tempBuffer;
+                                                }
+
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                break;
                             case NetworkServerPipelineType.SendOthers:
                             case NetworkServerPipelineType.SendOthersFromChannel:
-                                if (connection != tempConnection && 
-                                    (NetworkServerPipelineType.SendOthersFromChannel != pipeline.type || tempChannel.And(channel)))
+                                if (connection != tempConnection &&
+                                    (NetworkServerPipelineType.SendOthersFromChannel != pipeline.type ||
+                                     tempChannel.And(channel)))
                                 {
                                     buffer = __buffers[index.buffer];
                                     if (!buffer.Apply(connection, pipeline.value, ref driver))
@@ -461,7 +528,7 @@ namespace ZG
 
                                 break;
                             case NetworkServerPipelineType.SendSelf:
-                            //case NetworkServerPipelineType.SendSelfFromOthers:
+                            case NetworkServerPipelineType.SendSelfFromOthers:
                                 if (connection == tempConnection)
                                 {
                                     buffer = __buffers[index.buffer];
@@ -470,42 +537,12 @@ namespace ZG
                                 }
 
                                 break;
-                            case NetworkServerPipelineType.Custom:
-                                buffer = __buffers[index.buffer];
-                                while (buffer.ReadNext(out var bytes))
-                                {
-                                    if (!handler.Apply(
-                                            new DataStreamReader(bytes),
-                                            tempConnection,
-                                            connection,
-                                            ref driver))
-                                    {
-                                        foreach (var tempIndex in __indices.GetValuesForKey(connection))
-                                        {
-                                            tempPipeline = __pipelines[tempIndex.pipeline];
-                                            if (NetworkServerPipelineType.SendSelfFromOthers == tempPipeline.type &&
-                                                tempPipeline.value == pipeline.value)
-                                            {
-                                                tempBuffer = __buffers[tempIndex.buffer];
-                                                if (tempBuffer.BeginWrite(out var writer))
-                                                {
-                                                    writer.WriteBytes(bytes);
-                                                    
-                                                    tempBuffer.EndWrite(writer);
-                                                    
-                                                    __buffers[tempIndex.buffer] = tempBuffer;
-                                                }
-
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                break;
                         }
                     }
                 }
+                
+                if(indices.IsCreated)
+                    indices.Dispose();
             }
 
             public void Clear(in NetworkConnection connection)

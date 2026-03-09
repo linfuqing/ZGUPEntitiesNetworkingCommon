@@ -164,13 +164,13 @@ namespace ZG
         private struct Send : IJob
         {
             [ReadOnly]
-            public NativeArray<Header> headers;
+            public NativeArray<byte> headers;
             public NetworkDriver.Concurrent driver;
             public NetworkClientSendBuffer sendBuffer;
 
             public void Execute()
             {
-                var connection = headers[0].connection;
+                var connection = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>()).Reinterpret<NetworkConnection>(1)[0];
                 if (NetworkConnection.State.Connected != driver.GetConnectionState(connection))
                     return;
                 
@@ -184,18 +184,19 @@ namespace ZG
             public NetworkDriver driver;
             public NetworkClientSendBuffer sendBuffer;
             public NativeList<byte> buffer;
-            public NativeArray<Header> headers;
+            public NativeArray<byte> headers;
             public NativeParallelMultiHashMap<NetworkPipeline, Message> messages;
 
             public void Execute()
             {
-                var header = headers[0];
+                int headerSize = UnsafeUtility.SizeOf<Header>();
+                var header = headers.GetSubArray(0, headerSize).Reinterpret<Header>(1)[0];
 
                 buffer.Clear();
 
                 messages.Clear();
 
-                bool isEmpty = false, isConnected = NetworkConnection.State.Connected == driver.GetConnectionState(header.connection);
+                bool isEmpty = false;
                 NetworkEvent.Type cmd;
                 Message message;
                 DataStreamReader stream;
@@ -223,7 +224,14 @@ namespace ZG
 
                             break;
                         case NetworkEvent.Type.Connect:
-                            isConnected = true;
+                            int headersLength = headers.Length - headerSize;
+                            if (headersLength > 0 && driver.BeginSend(header.connection, out var writer) >= 0)
+                            {
+                                writer.WriteUShort((ushort)headersLength);
+                                writer.WriteBytes(headers.GetSubArray(headerSize, headersLength));
+
+                                driver.EndSend(writer);
+                            }
 
                             message.type = NetworkClientMessageType.Connect;
                             message.offset = buffer.Length;
@@ -232,8 +240,6 @@ namespace ZG
                             messages.Add(pipeline, message);
                             break;
                         case NetworkEvent.Type.Disconnect:
-                            isConnected = false;
-
                             __LogDisconnectReason((DisconnectReason)stream.ReadByte());
 
                             header.connection = driver.Connect(header.endpoint);
@@ -250,9 +256,10 @@ namespace ZG
                     }
                 } while (!isEmpty);
 
-                if (isConnected)
+                if (NetworkConnection.State.Connected == driver.GetConnectionState(header.connection))
                 {
                     var driver = this.driver.ToConcurrent();
+                    
                     sendBuffer.Apply(header.connection, ref driver);
                 }
             }
@@ -265,6 +272,14 @@ namespace ZG
 
         public struct MessageIterator : IDisposable
         {
+            private struct Comparer : System.Collections.Generic.IComparer<NetworkPipeline>
+            {
+                public int Compare(NetworkPipeline x, NetworkPipeline y)
+                {
+                    return x.GetHashCode().CompareTo(y.GetHashCode());
+                }
+            }
+            
             public struct Element
             {
                 private Message __message;
@@ -285,6 +300,7 @@ namespace ZG
             private bool __isCreatePipelines;
             private int __resultIndex;
             private int __pipelineIndex;
+            private int __pipelineCount;
             private NativeArray<NetworkPipeline> __pipelines;
             private NativeList<Message> __results;
             private NativeList<byte> __buffer;
@@ -298,6 +314,8 @@ namespace ZG
                 __resultIndex = -1;
                 __pipelineIndex = -1;
                 __pipelines = messages._values.GetKeyArray(allocator);
+                __pipelines.Sort(new Comparer());
+                __pipelineCount = __pipelines.Unique();
                 __results = new NativeList<Message>(allocator);
                 __buffer = messages._buffer;
                 __messages = messages._values;
@@ -308,6 +326,7 @@ namespace ZG
                 __isCreatePipelines = false;
                 __resultIndex = -1;
                 __pipelineIndex = -1;
+                __pipelineCount = pipelines.Length;
                 __pipelines = pipelines;
                 __results = new NativeList<Message>(allocator);
                 __buffer = messages._buffer;
@@ -326,7 +345,7 @@ namespace ZG
             {
                 if (++__resultIndex >= __results.Length)
                 {
-                    while (++__pipelineIndex < __pipelines.Length)
+                    while (++__pipelineIndex < __pipelineCount)
                     {
                         __results.Clear();
                         
@@ -341,7 +360,7 @@ namespace ZG
                         }
                     }
 
-                    if (__pipelineIndex < __pipelines.Length)
+                    if (__pipelineIndex < __pipelineCount)
                         __resultIndex = 0;
                     else
                         return false;
@@ -369,27 +388,35 @@ namespace ZG
         }
 
         private NetworkDriver __driver;
-        private NativeArray<Header> __headers;
+        private NativeList<byte> __headers;
         private NativeList<byte> __buffer;
         private NativeParallelMultiHashMap<NetworkPipeline, Message> __messages;
 
         public NetworkConnection.State connectionState => __driver.GetConnectionState(connection);
 
-        public NetworkConnection connection => __headers.Reinterpret<NetworkConnection>(UnsafeUtility.SizeOf<Header>())[0];
+        public NetworkConnection connection
+        {
+            get
+            {
+                int size = UnsafeUtility.SizeOf<NetworkConnection>();
+                return size > __headers.Length ? default : __headers.AsArray()
+                    .GetSubArray(0, size).Reinterpret<NetworkConnection>(1)[0];
+            }
+        }
 
         public NetworkClient(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
             __driver = NetworkDriver.Create(settings);
+            __headers = new NativeList<byte>(allocator);
             __buffer = new NativeList<byte>(allocator);
-            __headers = CollectionHelper.CreateNativeArray<Header>(1, allocator, NativeArrayOptions.ClearMemory);
             __messages = new NativeParallelMultiHashMap<NetworkPipeline, Message>(1, allocator);
         }
 
         public void Dispose()
         {
             __driver.Dispose();
-            __buffer.Dispose();
             __headers.Dispose();
+            __buffer.Dispose();
             __messages.Dispose();
         }
 
@@ -405,15 +432,23 @@ namespace ZG
             //__identities.Clear();
         }
 
-        public void Connect(in NetworkEndpoint endPoint)
+        public void Connect(in NetworkEndpoint endPoint, in NativeArray<byte> headers)
         {
             if (NetworkConnection.State.Disconnected != connectionState)
                 __driver.Disconnect(connection);
 
+            int headerSize = UnsafeUtility.SizeOf<Header>(), headersSize = headers.IsCreated ? headers.Length : 0;
+            __headers.ResizeUninitialized(headerSize + headersSize);
+            var headersArray = __headers.AsArray();
+            var temp = headersArray.GetSubArray(0, headerSize).Reinterpret<Header>(1);
+            
             Header header;
             header.connection = __driver.Connect(endPoint);
             header.endpoint = endPoint;
-            __headers[0] = header;
+            temp[0] = header;
+            
+            if(headersSize > 0)
+                NativeArray<byte>.Copy(headers, 0, headersArray, headerSize, headersSize);
         }
 
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
@@ -452,12 +487,14 @@ namespace ZG
             in JobHandle inputDeps)
         {
             var jobHandle = inputDeps;
+
+            var headers = __headers.AsArray();
             
             bool bound = __driver.Bound;
             if (bound)
             {
                 Send send;
-                send.headers = __headers;
+                send.headers = headers;
                 send.driver = __driver.ToConcurrent();
                 send.sendBuffer = sendBuffer;
 
@@ -470,7 +507,7 @@ namespace ZG
             popEvents.driver = __driver;
             popEvents.sendBuffer = sendBuffer;
             popEvents.buffer = __buffer;
-            popEvents.headers = __headers;
+            popEvents.headers = headers;
             popEvents.messages = __messages;
 
             jobHandle = popEvents.ScheduleByRef(jobHandle);
@@ -532,21 +569,33 @@ namespace ZG
         
         public NetworkClient.Messages AsMessages() => __instance.AsMessages();
 
-        public void Connect(in NetworkEndpoint endPoint)
+        public void Connect(in NetworkEndpoint endPoint, in NativeArray<byte> headers)
         {
-            __instance.Connect(endPoint);
+            __instance.Connect(endPoint, headers);
         }
 
-        public bool Connect(string address, ushort port)
+        public bool Connect(string address, ushort port, in NativeArray<byte> headers)
         {
             if (NetworkEndpoint.TryParse(address, port, out var endpoint))
             {
-                Connect(endpoint);
+                Connect(endpoint, headers);
 
                 return true;
             }
 
             return false;
+        }
+
+        public bool Connect<T>(string address, ushort port, in T header) where T : unmanaged
+        {
+            var headers = new NativeArray<T>(1, Allocator.Temp);
+            headers[0] = header;
+
+            var result = Connect(address, port, headers.Reinterpret<byte>(UnsafeUtility.SizeOf<T>()));
+
+            headers.Dispose();
+            
+            return result;
         }
 
         public int CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)

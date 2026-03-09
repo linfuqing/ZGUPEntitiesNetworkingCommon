@@ -80,7 +80,7 @@ namespace ZG
                     __sizes, 
                     writer.Capacity - writer.Length + byteOffset, 
                     __index);
-                if (count < 0)
+                if (count < __index)
                 {
                     result = driver.EndSend(writer);
                     if (result < 0)

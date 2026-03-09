@@ -220,6 +220,14 @@ namespace ZG
 
     public struct NetworkServerSendBuffer : IComponentData
     {
+        private struct Comparer : System.Collections.Generic.IComparer<NetworkConnection>
+        {
+            public int Compare(NetworkConnection x, NetworkConnection y)
+            {
+                return x.GetHashCode().CompareTo(y.GetHashCode());
+            }
+        }
+
         private struct Pipeline
         {
             public NetworkServerPipelineType type;
@@ -651,8 +659,10 @@ namespace ZG
             
             using (var keys = __indices.GetKeyArray(Allocator.Temp))
             {
-                foreach (var key in keys)
-                    __indices.Add(key, index);
+                keys.Sort(new Comparer());
+                int count = keys.Unique();
+                for(int i = 0; i < count; ++i)
+                    __indices.Add(keys[i], index);
             }
 
             return result;

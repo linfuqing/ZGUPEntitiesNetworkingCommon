@@ -119,7 +119,7 @@ namespace ZG
                 SendHeader(true, pipelineIndexToOthers, (int)NetworkRelayMessageType.Leave, identityIndex, sendBuffer);
             }
 
-            __channel = -1;
+            __channel = 0;
         }
         
         public void Relay(
@@ -231,7 +231,7 @@ namespace ZG
         public NativeArray<NetworkRelayServerIdentity> identities;
 
         [NativeDisableParallelForRestriction] 
-        public NativeArray<int> identityCount;
+        public NativeArray<int> channelCount;
 
         public void Connect(NetworkServerSendBufferWrapper sendBuffer)
         {
@@ -279,7 +279,7 @@ namespace ZG
                         pipelineIndexSendSelf,
                         pipelineIndexSendOthersFromChannel,
                         identityIndex,
-                        System.Threading.Interlocked.Increment(ref identityCount.AsSpan()[0]),
+                        System.Threading.Interlocked.Increment(ref channelCount.AsSpan()[0]),
                         sendBuffer);
 
                     identities[identityIndex] = identity;
@@ -434,7 +434,7 @@ namespace ZG
         private NetworkServer __instance;
         private NetworkServerSendBuffer __sendBuffer;
 
-        private NativeArray<int> __identityCount;
+        private NativeArray<int> __channelCount;
 
         private NativeList<int> __identityIndexPool;
 
@@ -461,9 +461,9 @@ namespace ZG
                 __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendOthersFromChannel, pipeline);
             __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendSelfFromOthers, pipeline);
 
-            __identityCount = CollectionHelper.CreateNativeArray<int>(1, allocator);
+            __channelCount = CollectionHelper.CreateNativeArray<int>(1, allocator);
 
-            __identityCount[0] = (int)NetworkRelayType.Identity;
+            __channelCount[0] = (int)NetworkRelayType.Identity;
 
             __identityIndexPool = new NativeList<int>(allocator);
 
@@ -508,7 +508,7 @@ namespace ZG
         {
             __instance.Dispose();
             __sendBuffer.Dispose();
-            __identityCount.Dispose();
+            __channelCount.Dispose();
             __identityIndexPool.Dispose();
             __identities.Dispose();
             __identityIndices.Dispose();
@@ -542,7 +542,7 @@ namespace ZG
             handler.pipelineIndexSendOthersFromChannel = __pipelineIndexSendOthersFromChannel;
             handler.identities = identities;
             handler.identityIndices = __identityIndices;
-            handler.identityCount = __identityCount;
+            handler.channelCount = __channelCount;
 
             NetworkRelayServerBufferHandler bufferHandler;
             bufferHandler.pipelineIndexDrop = __pipelineIndexDrop;

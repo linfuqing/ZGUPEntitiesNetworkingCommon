@@ -13,8 +13,8 @@ namespace ZG
 
     public enum NetworkClientMessageType
     {
-        Data, 
         Connect, 
+        Data, 
         Disconnect
     }
 
@@ -152,7 +152,11 @@ namespace ZG
 
             public int CompareTo(Message other)
             {
-                return other.offset.CompareTo(other.offset);
+                int result = type.CompareTo(other.type);
+                if(0 == result)
+                    return offset.CompareTo(other.offset);
+
+                return result;
             }
         }
 
@@ -198,8 +202,6 @@ namespace ZG
                 NetworkPipeline pipeline;
                 do
                 {
-                    message.offset = buffer.Length;
-                    
                     cmd = driver.PopEventForConnection(header.connection, out stream, out pipeline);
                     switch (cmd)
                     {
@@ -211,6 +213,7 @@ namespace ZG
                             
                             do
                             {
+                                message.offset = buffer.Length;
                                 message.size = stream.ReadUShort();
                                 buffer.ResizeUninitialized(message.offset + message.size);
                                 stream.ReadBytes(buffer.AsArray().GetSubArray(message.offset, message.size));
@@ -223,6 +226,7 @@ namespace ZG
                             isConnected = true;
 
                             message.type = NetworkClientMessageType.Connect;
+                            message.offset = buffer.Length;
                             message.size = 0;
 
                             messages.Add(pipeline, message);
@@ -238,6 +242,7 @@ namespace ZG
                             connections[0] = header.connection;
                             
                             message.type = NetworkClientMessageType.Disconnect;
+                            message.offset = buffer.Length;
                             message.size = 0;
 
                             messages.Add(pipeline, message);

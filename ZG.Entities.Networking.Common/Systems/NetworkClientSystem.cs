@@ -18,7 +18,10 @@ namespace ZG
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            state.Dependency = SystemAPI.GetSingleton<NetworkClientDriver>().Schedule(state.Dependency);
+            var driver = SystemAPI.GetSingleton<NetworkClientDriver>();
+            state.Dependency = driver.Schedule(state.Dependency);
+            
+            SystemAPI.SetSingleton(driver);
         }
     }
 }

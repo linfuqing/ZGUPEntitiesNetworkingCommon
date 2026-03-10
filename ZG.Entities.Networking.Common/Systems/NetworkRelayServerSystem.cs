@@ -17,7 +17,11 @@ namespace ZG
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            state.Dependency = SystemAPI.GetSingleton<NetworkRelayServer>().Schedule(InnerloopBatchCount, state.Dependency);
+            var server = SystemAPI.GetSingleton<NetworkRelayServer>();
+            
+            state.Dependency = server.Schedule(InnerloopBatchCount, state.Dependency);
+            
+            SystemAPI.SetSingleton(server);
         }
     }
 }

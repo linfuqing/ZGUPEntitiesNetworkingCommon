@@ -160,6 +160,60 @@ namespace ZG
             }
         }
 
+        public struct MessageElement
+        {
+            public readonly Message Message;
+                
+            private NativeList<byte> __buffer;
+                
+            public DataStreamReader reader => Message.Read(__buffer.AsArray());
+
+            internal MessageElement(in Message message, in NativeList<byte> buffer)
+            {
+                Message = message;
+                __buffer = buffer;
+            }
+
+            public MessageElement(in Message message, in NetworkClient client)
+            {
+                Message = message;
+                __buffer = client.__buffer;
+            }
+        }
+
+        public struct MessageEnumerator
+        {
+            private NativeList<byte> __buffer;
+            private NativeParallelMultiHashMap<NetworkPipeline, Message>.KeyValueEnumerator __enumerator;
+
+            public MessageElement Current => new MessageElement(__enumerator.Current.Value, __buffer);
+
+            public MessageEnumerator(in Messages messages)
+            {
+                __buffer = messages._buffer;
+                __enumerator = messages._values.GetEnumerator();
+            }
+
+            public bool MoveNext() => __enumerator.MoveNext();
+        }
+
+        public struct Messages
+        {
+            internal NativeList<byte> _buffer;
+            internal NativeParallelMultiHashMap<NetworkPipeline, Message> _values;
+            
+            public Messages(in NetworkClient client)
+            {
+                _buffer = client.__buffer;
+                _values = client.__messages;
+            }
+
+            public MessageEnumerator GetEnumerator()
+            {
+                return new MessageEnumerator(in this);
+            }
+        }
+
         [BurstCompile]
         private struct Send : IJob
         {
@@ -244,7 +298,8 @@ namespace ZG
 
                             header.connection = driver.Connect(header.endpoint);
 
-                            var connections = headers.Reinterpret<NetworkConnection>(UnsafeUtility.SizeOf<Header>());
+                            var connections = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>())
+                                .Reinterpret<NetworkConnection>(1);
                             connections[0] = header.connection;
                             
                             message.type = NetworkClientMessageType.Disconnect;
@@ -267,123 +322,6 @@ namespace ZG
             private void __LogDisconnectReason(DisconnectReason disconnectReason)
             {
                 UnityEngine.Debug.LogError($"DisconnectReason: {disconnectReason}");
-            }
-        }
-
-        public struct MessageIterator : IDisposable
-        {
-            private struct Comparer : System.Collections.Generic.IComparer<NetworkPipeline>
-            {
-                public int Compare(NetworkPipeline x, NetworkPipeline y)
-                {
-                    return x.GetHashCode().CompareTo(y.GetHashCode());
-                }
-            }
-            
-            public struct Element
-            {
-                private Message __message;
-                
-                private NativeList<byte> __buffer;
-                
-                public NetworkClientMessageType type => __message.type;
-
-                public DataStreamReader reader => __message.Read(__buffer.AsArray());
-
-                internal Element(in Message message, in NativeList<byte> buffer)
-                {
-                    __message = message;
-                    __buffer = buffer;
-                }
-            }
-
-            private bool __isCreatePipelines;
-            private int __resultIndex;
-            private int __pipelineIndex;
-            private int __pipelineCount;
-            private NativeArray<NetworkPipeline> __pipelines;
-            private NativeList<Message> __results;
-            private NativeList<byte> __buffer;
-            private NativeParallelMultiHashMap<NetworkPipeline, Message> __messages;
-
-            public Element Current => new Element(__results[__resultIndex], __buffer);
-
-            public MessageIterator(in Messages messages, in AllocatorManager.AllocatorHandle allocator)
-            {
-                __isCreatePipelines = true;
-                __resultIndex = -1;
-                __pipelineIndex = -1;
-                __pipelines = messages._values.GetKeyArray(allocator);
-                __pipelines.Sort(new Comparer());
-                __pipelineCount = __pipelines.Unique();
-                __results = new NativeList<Message>(allocator);
-                __buffer = messages._buffer;
-                __messages = messages._values;
-            }
-            
-            public MessageIterator(in NativeArray<NetworkPipeline> pipelines, in Messages messages, in AllocatorManager.AllocatorHandle allocator)
-            {
-                __isCreatePipelines = false;
-                __resultIndex = -1;
-                __pipelineIndex = -1;
-                __pipelineCount = pipelines.Length;
-                __pipelines = pipelines;
-                __results = new NativeList<Message>(allocator);
-                __buffer = messages._buffer;
-                __messages = messages._values;
-            }
-
-            public void Dispose()
-            {
-                if(__isCreatePipelines)
-                    __pipelines.Dispose();
-                
-                __results.Dispose();
-            }
-
-            public bool MoveNext()
-            {
-                if (++__resultIndex >= __results.Length)
-                {
-                    while (++__pipelineIndex < __pipelineCount)
-                    {
-                        __results.Clear();
-                        
-                        foreach (var message in __messages.GetValuesForKey(__pipelines[__pipelineIndex]))
-                            __results.Add(message);
-
-                        if (!__results.IsEmpty)
-                        {
-                            __results.Sort();
-
-                            break;
-                        }
-                    }
-
-                    if (__pipelineIndex < __pipelineCount)
-                        __resultIndex = 0;
-                    else
-                        return false;
-                }
-
-                return true;
-            }
-        }
-
-        public struct Messages
-        {
-            internal NativeList<byte> _buffer;
-            internal NativeParallelMultiHashMap<NetworkPipeline, Message> _values;
-            
-            public Messages(in NetworkClient client)
-            {
-                _buffer = client.__buffer;
-                _values = client.__messages;
-            }
-
-            public MessageIterator CreateIterator(AllocatorManager.AllocatorHandle allocator)
-            {
-                return new MessageIterator(in this, allocator);
             }
         }
 
@@ -524,6 +462,10 @@ namespace ZG
         private NetworkClient __instance;
         private NetworkClientSendBuffer __sendBuffer;
         
+        public NetworkClient instance => __instance;
+        
+        public NetworkClientSendBuffer sendBuffer => __sendBuffer;
+
         public NetworkClientDriver(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
             __instance = new NetworkClient(settings, allocator);
@@ -567,18 +509,11 @@ namespace ZG
             __sendBuffer.Dispose();
         }
         
-        public NetworkClient.Messages AsMessages() => __instance.AsMessages();
-
-        public void Connect(in NetworkEndpoint endPoint, in NativeArray<byte> headers)
-        {
-            __instance.Connect(endPoint, headers);
-        }
-
         public bool Connect(string address, ushort port, in NativeArray<byte> headers)
         {
             if (NetworkEndpoint.TryParse(address, port, out var endpoint))
             {
-                Connect(endpoint, headers);
+                __instance.Connect(endpoint, headers);
 
                 return true;
             }
@@ -618,16 +553,6 @@ namespace ZG
             var pipeline = __sendBuffer.GetPipeline(pipelineIndex);
             
             return __sendBuffer.CreatePipeline(pipeline);
-        }
-
-        public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
-        {
-            return __sendBuffer.BeginWrite(pipelineIndex, out writer, capacity);
-        }
-
-        public void EndWrite(in DataStreamWriter writer)
-        {
-            __sendBuffer.EndWrite(writer);
         }
 
         public JobHandle Schedule(in JobHandle inputDeps)

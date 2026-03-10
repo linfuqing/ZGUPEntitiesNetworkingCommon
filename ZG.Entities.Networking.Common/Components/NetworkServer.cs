@@ -329,7 +329,7 @@ namespace ZG
                 
                 public int Compare(Index x, Index y)
                 {
-                    return pipelines[x.pipeline].type.CompareTo(pipelines[y.pipeline].type);
+                    return ((int)pipelines[x.pipeline].type).CompareTo((int)pipelines[y.pipeline].type);
                 }
             }
             

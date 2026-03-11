@@ -267,7 +267,7 @@ namespace ZG
 
             public bool Or(in Channel channel)
             {
-                bool result = __values.IsEmpty;
+                bool result = __values.IsEmpty || channel.__values.IsEmpty;
                 if (!result)
                 {
                     foreach (var value in __values)
@@ -286,8 +286,8 @@ namespace ZG
 
             public bool And(in Channel channel)
             {
-                bool result = __values.IsEmpty;
-                if (!result)
+                bool result = false;
+                if (!__values.IsEmpty && !channel.__values.IsEmpty)
                 {
                     result = true;
                     foreach (var value in __values)

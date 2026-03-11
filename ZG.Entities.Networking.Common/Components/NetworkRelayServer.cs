@@ -235,7 +235,8 @@ namespace ZG
 
         public void Connect(NetworkServerSendBufferWrapper sendBuffer)
         {
-            sendBuffer.AddChannel(0);
+            //空的时候才能Or
+            //sendBuffer.AddChannel(0);
         }
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)

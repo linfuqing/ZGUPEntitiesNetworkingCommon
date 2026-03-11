@@ -31,6 +31,17 @@ namespace ZG
 
     public static class NetworkingUtility
     {
+        public static uint RelayID(this NetworkRelayType relayType)
+        {
+            UnityEngine.Assertions.Assert.IsTrue(relayType > NetworkRelayType.Identity);
+            return (uint)(relayType - NetworkRelayType.Identity);
+        }
+
+        public static NetworkRelayType RelayType(this uint id)
+        {
+            return (NetworkRelayType)(id + (uint)NetworkRelayType.Identity);
+        }
+        
         public static NativeArray<NetworkPipelineStageId> ToPipelineStageIDs(
             this in NativeArray<NetworkPipelineStage> stages, 
             in AllocatorManager.AllocatorHandle allocator)
@@ -71,23 +82,23 @@ namespace ZG
             this ref DataStreamReader reader, 
             out int messageType, 
             out NetworkRelayType relayType, 
-            out int identityIndex)
+            out uint id)
         {
             var streamCompressionModel =  StreamCompressionModel.Default;
             messageType = reader.ReadPackedInt(streamCompressionModel);
             relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
-            identityIndex = reader.ReadPackedInt(streamCompressionModel);
+            id = reader.ReadPackedUInt(streamCompressionModel);
             reader.Flush();
         }
         
         public static void ReadReplyHeader(
             this ref DataStreamReader reader, 
             out NetworkRelayType relayType, 
-            out int identityIndex)
+            out uint id)
         {
             var streamCompressionModel =  StreamCompressionModel.Default;
             relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
-            identityIndex = reader.ReadPackedInt(streamCompressionModel);
+            id = reader.ReadPackedUInt(streamCompressionModel);
             reader.Flush();
         }
     }

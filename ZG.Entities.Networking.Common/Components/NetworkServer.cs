@@ -21,9 +21,9 @@ namespace ZG
 
     public interface INetworkServerListener
     {
-        void Connect(in NetworkConnection connection);
+        void Connect(in NetworkConnection connection, uint id);
 
-        void Disconnect(in NetworkConnection connection);
+        void Disconnect(in NetworkConnection connection, uint id);
     }
     
     public interface INetworkServerHandler
@@ -49,32 +49,37 @@ namespace ZG
 
     public struct NetworkServerSendBufferWrapper
     {
+        public uint ID;
+        
         public readonly NetworkConnection Connection;
         
         private NetworkServerSendBuffer.Concurrent __sendBuffer;
 
+        public NativeArray<byte> payload => __sendBuffer.GetPayload(ID);
+
         internal NetworkServerSendBufferWrapper(in NetworkConnection connection,
             ref NetworkServerSendBuffer.Concurrent sendBuffer)
         {
+            ID = sendBuffer[connection];
             Connection = connection;
             __sendBuffer = sendBuffer;
         }
 
         public bool AddChannel(int value)
         {
-            return __sendBuffer.AddChannel(Connection, value);
+            return __sendBuffer.AddChannel(ID, value);
         }
         
         public bool RemoveChannel(int value)
         {
-            return __sendBuffer.RemoveChannel(Connection, value);
+            return __sendBuffer.RemoveChannel(ID, value);
         }
 
         public bool BeginWrite(
             int pipelineIndex,
             out DataStreamWriter writer, short capacity = 1024)
         {
-            return __sendBuffer.BeginWrite(pipelineIndex, Connection, out writer, capacity);
+            return __sendBuffer.BeginWrite(pipelineIndex, ID, out writer, capacity);
         }
 
         public void EndWrite(in DataStreamWriter writer)
@@ -97,6 +102,7 @@ namespace ZG
 
         public void Execute()
         {
+            uint id;
             int connectionIndex;
             foreach (var connectionToDisconnect in connectionsToDisconnect)
             {
@@ -104,9 +110,9 @@ namespace ZG
                 if(connectionIndex != -1)
                     connections.RemoveAtSwapBack(connectionIndex);
                     
-                sendBuffer.Disconnect(connectionToDisconnect);
+                id = sendBuffer.Disconnect(connectionToDisconnect);
                 
-                listener.Disconnect(connectionToDisconnect);
+                listener.Disconnect(connectionToDisconnect, id);
             }
                 
             connectionsToDisconnect.Clear();
@@ -114,15 +120,15 @@ namespace ZG
             connectionsToConnect.Clear();
 
             NetworkConnection connection;
-            while ((connection = driver.Accept()) != default)
+            while ((connection = driver.Accept(out var payload)) != default)
             {
                 connectionsToConnect.Add(connection);
                 
                 connections.Add(connection);
-                    
-                sendBuffer.Connect(connection);
                 
-                listener.Connect(connection);
+                id = sendBuffer.Connect(connection, payload);
+                
+                listener.Connect(connection, id);
             }
 
             connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, connections.Length);
@@ -231,14 +237,6 @@ namespace ZG
 
     public struct NetworkServerSendBuffer : IComponentData
     {
-        private struct Comparer : System.Collections.Generic.IComparer<NetworkConnection>
-        {
-            public int Compare(NetworkConnection x, NetworkConnection y)
-            {
-                return x.GetHashCode().CompareTo(y.GetHashCode());
-            }
-        }
-
         private struct Pipeline
         {
             public NetworkServerPipelineType type;
@@ -328,27 +326,48 @@ namespace ZG
         
         private struct Index
         {
-            public int pipeline;
-            public int buffer;
-        }
-
-        public struct Concurrent
-        {
-            private struct Comparer : System.Collections.Generic.IComparer<Index>
+            private struct Comparer : System.Collections.Generic.IComparer<PipelineBuffer>
             {
                 public NativeList<Pipeline> pipelines;
                 
-                public int Compare(Index x, Index y)
+                public int Compare(PipelineBuffer x, PipelineBuffer y)
                 {
                     return ((int)pipelines[x.pipeline].type).CompareTo((int)pipelines[y.pipeline].type);
                 }
             }
-            
+
+            public struct PipelineBuffer
+            {
+                public int pipeline;
+                public int buffer;
+            }
+
+            public int payloadOffset;
+            public int payloadSize;
+            public int channel;
+            public FixedList32Bytes<PipelineBuffer> pipelineBuffers;
+
+            public void Sort(in NativeList<Pipeline> pipelines)
+            {
+                Comparer comparer;
+                comparer.pipelines = pipelines;
+
+                unsafe
+                {
+                    NativeSortExtension.Sort(
+                        (PipelineBuffer*)((byte*)UnsafeUtility.AddressOf(ref pipelineBuffers) + UnsafeUtility.SizeOf<ushort>()),
+                        pipelineBuffers.Length, comparer);
+                }
+            }
+        }
+
+        public struct Concurrent
+        {
             [ReadOnly]
-            private NativeParallelMultiHashMap<NetworkConnection, Index> __indices;
-            
+            private NativeHashMap<NetworkConnection, uint> __ids;
+
             [ReadOnly]
-            private NativeHashMap<NetworkConnection, int> __channelIndices;
+            private NativeHashMap<uint, Index> __indices;
 
             [ReadOnly]
             private NativeList<Pipeline> __pipelines;
@@ -358,19 +377,32 @@ namespace ZG
 
             [NativeDisableParallelForRestriction]
             private NativeArray<Channel> __channels;
+            
+            [NativeDisableParallelForRestriction]
+            private NativeArray<byte> __payload;
+
+            public uint this[NetworkConnection connection] => __ids[connection];
 
             public Concurrent(ref NetworkServerSendBuffer buffer)
             {
+                __ids = buffer.__ids;
                 __indices = buffer.__indices;
-                __channelIndices = buffer.__channelIndices;
                 __pipelines = buffer.__pipelines;
                 __buffers = buffer.__buffers.AsDeferredJobArray();
                 __channels = buffer.__channels.AsDeferredJobArray();
+                __payload = buffer.__payloads.AsDeferredJobArray();
             }
 
-            public bool AddChannel(in NetworkConnection connection, int value)
+            public NativeArray<byte> GetPayload(uint id)
             {
-                int channelIndex = __channelIndices[connection];
+                var index = __indices[id];
+                
+                return __payload.GetSubArray(index.payloadOffset, index.payloadSize);
+            }
+
+            public bool AddChannel(uint id, int value)
+            {
+                int channelIndex = __indices[id].channel;
                 Channel channel = __channels[channelIndex];
 
                 if (channel.Add(value))
@@ -383,9 +415,9 @@ namespace ZG
                 return false;
             }
 
-            public bool RemoveChannel(in NetworkConnection connection, int value)
+            public bool RemoveChannel(uint id, int value)
             {
-                int channelIndex = __channelIndices[connection];
+                int channelIndex = __indices[id].channel;
                 Channel channel = __channels[channelIndex];
 
                 if (channel.Remove(value))
@@ -400,24 +432,21 @@ namespace ZG
 
             public bool BeginWrite(
                 int pipelineIndex,
-                in NetworkConnection connection, 
+                uint id, 
                 out DataStreamWriter writer, short capacity = 1024)
             {
-                if (__indices.TryGetFirstValue(connection, out var index, out var iterator))
+                foreach (var pipelineBuffers in __indices[id].pipelineBuffers)
                 {
-                    do
+                    if (pipelineBuffers.pipeline == pipelineIndex)
                     {
-                        if (index.pipeline == pipelineIndex)
-                        {
-                            var buffer = __buffers[index.buffer];
-                            bool result = buffer.BeginWrite(out writer, capacity);
-                            __buffers[index.buffer] = buffer;
+                        var buffer = __buffers[pipelineBuffers.buffer];
+                        bool result = buffer.BeginWrite(out writer, capacity);
+                        __buffers[pipelineBuffers.buffer] = buffer;
 
-                            writer.m_SendHandleData = (IntPtr)index.buffer;
+                        writer.m_SendHandleData = (IntPtr)pipelineBuffers.buffer;
 
-                            return result;
-                        }
-                    } while (__indices.TryGetNextValue(out index, ref iterator));
+                        return result;
+                    }
                 }
 
                 writer = default;
@@ -453,63 +482,53 @@ namespace ZG
                     }
                 }*/
 
-                Channel channel = __channels[__channelIndices[connection]], tempChannel;
+                var id = __ids[connection];
+                Index index = __indices[id], tempIndex;
+                Channel channel = __channels[__indices[id].channel], tempChannel;
                 Pipeline pipeline, tempPipeline;
                 NetworkSendBuffer buffer, tempBuffer;
                 NetworkConnection tempConnection;
-                NativeList<Index> indices = default;
-                foreach (var channelIndex in __channelIndices)
+                foreach (var tempID in __ids)
                 {
-                    tempChannel = __channels[channelIndex.Value];
+                    tempIndex = __indices[tempID.Value];
+                    tempChannel = __channels[tempIndex.channel];
                     if (!tempChannel.Or(channel))
                         continue;
 
-                    tempConnection = channelIndex.Key;
+                    tempConnection = tempID.Key;
 
-                    if (indices.IsCreated)
-                        indices.Clear();
-                    else
-                        indices = new NativeList<Index>(Allocator.Temp);
-                    
-                    foreach (var index in __indices.GetValuesForKey(tempConnection))
-                        indices.Add(index);
-
-                    Comparer comparer;
-                    comparer.pipelines = __pipelines;
-                    indices.Sort(comparer);
-
-                    foreach (var index in indices)
+                    foreach (var tempPipelineBuffer in tempIndex.pipelineBuffers)
                     {
-                        pipeline = __pipelines[index.pipeline];
+                        tempPipeline = __pipelines[tempPipelineBuffer.pipeline];
 
-                        switch (pipeline.type)
+                        switch (tempPipeline.type)
                         {
                             case NetworkServerPipelineType.Custom:
-                                buffer = __buffers[index.buffer];
+                                buffer = __buffers[tempPipelineBuffer.buffer];
                                 while (buffer.ReadNext(out var bytes))
                                 {
                                     if (!handler.Apply(
-                                            index.pipeline,
+                                            tempPipelineBuffer.pipeline,
                                             new DataStreamReader(bytes),
                                             tempConnection,
                                             connection,
                                             ref driver,
                                             ref this))
                                     {
-                                        foreach (var tempIndex in __indices.GetValuesForKey(connection))
+                                        foreach (var pipelineBuffer in index.pipelineBuffers)
                                         {
-                                            tempPipeline = __pipelines[tempIndex.pipeline];
-                                            if (NetworkServerPipelineType.SendSelfFromOthers == tempPipeline.type &&
-                                                tempPipeline.value == pipeline.value)
+                                            pipeline = __pipelines[pipelineBuffer.pipeline];
+                                            if (NetworkServerPipelineType.SendSelfFromOthers == pipeline.type &&
+                                                pipeline.value == tempPipeline.value)
                                             {
-                                                tempBuffer = __buffers[tempIndex.buffer];
+                                                tempBuffer = __buffers[pipelineBuffer.buffer];
                                                 if (tempBuffer.BeginWrite(out var writer))
                                                 {
                                                     writer.WriteBytes(bytes);
 
                                                     tempBuffer.EndWrite(writer);
 
-                                                    __buffers[tempIndex.buffer] = tempBuffer;
+                                                    __buffers[pipelineBuffer.buffer] = tempBuffer;
                                                 }
 
                                                 break;
@@ -522,22 +541,22 @@ namespace ZG
                             case NetworkServerPipelineType.SendOthers:
                             case NetworkServerPipelineType.SendOthersFromChannel:
                                 if (connection != tempConnection &&
-                                    (NetworkServerPipelineType.SendOthersFromChannel != pipeline.type ||
+                                    (NetworkServerPipelineType.SendOthersFromChannel != tempPipeline.type ||
                                      tempChannel.And(channel)))
                                 {
-                                    buffer = __buffers[index.buffer];
-                                    if (!buffer.Apply(connection, pipeline.value, ref driver))
+                                    buffer = __buffers[tempPipelineBuffer.buffer];
+                                    if (!buffer.Apply(connection, tempPipeline.value, ref driver))
                                     {
-                                        foreach (var tempIndex in __indices.GetValuesForKey(connection))
+                                        foreach (var pipelineBuffer in index.pipelineBuffers)
                                         {
-                                            tempPipeline = __pipelines[tempIndex.pipeline];
-                                            if (NetworkServerPipelineType.SendSelfFromOthers == tempPipeline.type &&
-                                                tempPipeline.value == pipeline.value)
+                                            pipeline = __pipelines[pipelineBuffer.pipeline];
+                                            if (NetworkServerPipelineType.SendSelfFromOthers == pipeline.type &&
+                                                pipeline.value == tempPipeline.value)
                                             {
-                                                tempBuffer = __buffers[tempIndex.buffer];
+                                                tempBuffer = __buffers[pipelineBuffer.buffer];
                                                 tempBuffer.Append(buffer);
 
-                                                __buffers[tempIndex.buffer] = tempBuffer;
+                                                __buffers[pipelineBuffer.buffer] = tempBuffer;
 
                                                 break;
                                             }
@@ -550,79 +569,68 @@ namespace ZG
                             case NetworkServerPipelineType.SendSelfFromOthers:
                                 if (connection == tempConnection)
                                 {
-                                    buffer = __buffers[index.buffer];
-                                    buffer.Apply(connection, pipeline.value, ref driver);
-                                    __buffers[index.buffer] = buffer;
+                                    buffer = __buffers[tempPipelineBuffer.buffer];
+                                    buffer.Apply(connection, tempPipeline.value, ref driver);
+                                    __buffers[tempPipelineBuffer.buffer] = buffer;
                                 }
 
                                 break;
                         }
                     }
                 }
-                
-                if(indices.IsCreated)
-                    indices.Dispose();
             }
 
             public void Clear(in NetworkConnection connection)
             {
-                if (__indices.TryGetFirstValue(connection, out var index, out var iterator))
+                Pipeline pipeline;
+                NetworkSendBuffer buffer;
+                var id = __ids[connection];
+                foreach (var pipelineBuffer in __indices[id].pipelineBuffers)
                 {
-                    Pipeline pipeline;
-                    NetworkSendBuffer buffer;
-                    do
+                    pipeline = __pipelines[pipelineBuffer.pipeline];
+                    switch (pipeline.type)
                     {
-                        pipeline = __pipelines[index.pipeline];
-                        switch (pipeline.type)
-                        {
-                            case NetworkServerPipelineType.SendOthers:
-                            case NetworkServerPipelineType.SendOthersFromChannel:
-                            case NetworkServerPipelineType.Custom:
-                                buffer = __buffers[index.buffer];
-                                buffer.Clear();
-                                __buffers[index.buffer] = buffer;
-                                break;
-                        }
-
-                    } while (__indices.TryGetNextValue(out index, ref iterator));
+                        case NetworkServerPipelineType.SendOthers:
+                        case NetworkServerPipelineType.SendOthersFromChannel:
+                        case NetworkServerPipelineType.Custom:
+                            buffer = __buffers[pipelineBuffer.buffer];
+                            buffer.Clear();
+                            __buffers[pipelineBuffer.buffer] = buffer;
+                            break;
+                    }
                 }
             }
         }
 
-        private NativeList<int> __bufferIndexPool;
-        private NativeList<int> __channelIndexPool;
+        private NativeList<byte> __payloads;
         private NativeList<Channel> __channels;
         private NativeList<Pipeline> __pipelines;
         private NativeList<NetworkSendBuffer> __buffers;
-        private NativeHashMap<NetworkConnection, int> __channelIndices;
-        private NativeParallelMultiHashMap<NetworkConnection, Index> __indices;
+        private NativeHashMap<uint, Index> __indices;
+        private NativeHashMap<NetworkConnection, uint> __ids;
 
         public unsafe AllocatorManager.AllocatorHandle allocator => __pipelines.GetUnsafeList()->Allocator;
 
         public NetworkServerSendBuffer(
             in AllocatorManager.AllocatorHandle allocator)
         {
-            __bufferIndexPool = new NativeList<int>(allocator);
-            
-            __channelIndexPool = new NativeList<int>(allocator);
+            __payloads = new NativeList<byte>(allocator);
             
             __channels = new NativeList<Channel>(allocator);
             
             __pipelines = new NativeList<Pipeline>(allocator);
 
             __buffers = new NativeList<NetworkSendBuffer>(allocator);
-            
-            __channelIndices = new NativeHashMap<NetworkConnection, int>(1, allocator);
 
-            __indices = new NativeParallelMultiHashMap<NetworkConnection, Index>(1, allocator);
+            __indices = new NativeHashMap<uint, Index>(1, allocator);
+
+            __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
         }
 
         public void Dispose()
         {
-            __bufferIndexPool.Dispose();
-
-            __channelIndexPool.Dispose();
-
+            __payloads.Dispose();
+            
             foreach (var channels in __channels)
                 channels.Dispose();
 
@@ -635,9 +643,9 @@ namespace ZG
 
             __buffers.Dispose();
 
-            __channelIndices.Dispose();
-
             __indices.Dispose();
+
+            __ids.Dispose();
         }
 
         public void Clear()
@@ -659,83 +667,83 @@ namespace ZG
                 if (pipeline.type == type && pipeline.value == value)
                     return i;
             }
+
+            Index.PipelineBuffer pipelineBuffer;
+            pipelineBuffer.pipeline = __pipelines.Length;
             
             pipeline.type = type;
             pipeline.value = value;
             __pipelines.Add(pipeline);
 
-            Index index;
-            index.pipeline = __pipelines.Length;
-            index.buffer = __Alloc();
-            
             using (var keys = __indices.GetKeyArray(Allocator.Temp))
             {
-                keys.Sort(new Comparer());
-                int count = keys.Unique();
-                for(int i = 0; i < count; ++i)
-                    __indices.Add(keys[i], index);
+                Index index;
+                foreach (var key in keys)
+                {
+                    index = __indices[key];
+                    
+                    pipelineBuffer.buffer = __Alloc();
+                    index.pipelineBuffers.Add(pipelineBuffer);
+                    index.Sort(__pipelines);
+                    
+                    __indices[key] = index;
+                }
             }
 
             return result;
         }
 
-        public void Connect(in NetworkConnection connection)
+        public uint Connect(in NetworkConnection connection, in NativeArray<byte> payload)
         {
-            int channelIndex, length = __channelIndexPool.Length;
-            if (length > 0)
-            {
-                channelIndex = __channelIndexPool[--length];
-                __channelIndexPool.ResizeUninitialized(length);
-                
-                __channels.ElementAt(channelIndex).Clear();
-            }
-            else
-            {
-                channelIndex = __channels.Length;
-                
-                __channels.Add(new Channel(allocator));
-            }
+            uint id = new DataStreamReader(payload).ReadPackedUInt(StreamCompressionModel.Default);
             
-            __channelIndices.Add(connection, channelIndex);
+            __ids.Add(connection, id);
+
+            if (__indices.TryGetValue(id, out var index))
+            {
+                NativeArray<byte>.Copy(payload, 0, __payloads.AsArray(), index.payloadOffset, index.payloadSize);
+                
+                return id;
+            }
+
+            index.payloadOffset = __payloads.Length;
+            index.payloadSize = payload.Length;
             
-            Index index;
+            __payloads.AddRange(payload);
+            
+            index.channel = __channels.Length;
+                
+            __channels.Add(new Channel(allocator));
+
+            Index.PipelineBuffer pipelineBuffer;
             int numPipelines = __pipelines.Length;
             for (int i = 0; i < numPipelines; ++i)
             {
-                index.pipeline = i;
-                index.buffer = __Alloc();
+                pipelineBuffer.pipeline = i;
+                pipelineBuffer.buffer = __Alloc();
                 
-                __indices.Add(connection, index);
+                index.pipelineBuffers.Add(pipelineBuffer);
             }
+            
+            index.Sort(__pipelines);
+            
+            __indices.Add(id, index);
+
+            return id;
         }
 
-        public void Disconnect(in NetworkConnection connection)
+        public uint Disconnect(in NetworkConnection connection)
         {
-            __channelIndexPool.Add(__channelIndices[connection]);
-            __channelIndices.Remove(connection);
-            
-            foreach (var index in __indices.GetValuesForKey(connection))
-                __bufferIndexPool.Add(index.buffer);
-            
-            __indices.Remove(connection);
+            uint id = __ids[connection];
+            __ids.Remove(connection);
+            return id;
         }
 
         private int __Alloc()
         {
-            int result, length = __bufferIndexPool.Length;
-            if (length > 0)
-            {
-                result = __bufferIndexPool[--length];
-                __bufferIndexPool.ResizeUninitialized(length);
-                
-                __buffers.ElementAt(result).Clear();
-            }
-            else
-            {
-                result = __buffers.Length;
-                
-                __buffers.Add(new NetworkSendBuffer(allocator));
-            }
+            int result = __buffers.Length;
+
+            __buffers.Add(new NetworkSendBuffer(allocator));
 
             return result;
         }

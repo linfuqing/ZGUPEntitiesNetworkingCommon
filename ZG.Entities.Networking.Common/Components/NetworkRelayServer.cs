@@ -15,63 +15,70 @@ namespace ZG
     public struct NetworkRelayServerIdentity
     {
         private int __channel;
-        private UnsafeList<byte> __bytes;
+        //private UnsafeList<byte> __bytes;
 
         public int channel => __channel;
 
         public static void SendRelay(
             int type,
             int relayType,
-            int identityIndex,
+            uint id,
             ref DataStreamReader reader,
             ref DataStreamWriter writer)
         {
             var streamCompressionModel = StreamCompressionModel.Default;
             writer.WritePackedInt(type, streamCompressionModel);
             writer.WritePackedInt(relayType, streamCompressionModel);
-            writer.WritePackedInt(identityIndex, streamCompressionModel);
-
+            writer.WritePackedUInt(id, streamCompressionModel);
+            writer.Flush();
+            reader.Flush();
+            
             int numBytes = reader.Length - reader.GetBytesRead();
-            using (var bytes = new NativeArray<byte>(numBytes, Allocator.Temp))
+
+            NativeArray<byte> bytes;
+            unsafe
             {
-                reader.ReadBytes(bytes);
-                writer.WriteBytes(bytes);
+                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>(reader.GetUnsafeReadOnlyPtr(), numBytes,
+                    Allocator.None, true);
             }
+
+            writer.WriteBytes(bytes);
+            
+            reader.SeekSet(reader.Length);
         }
 
         public NetworkRelayServerIdentity(in AllocatorManager.AllocatorHandle allocator)
         {
             __channel = 0;
-            __bytes = new UnsafeList<byte>(1, allocator);
+            //__bytes = new UnsafeList<byte>(1, allocator);
         }
 
         public void Dispose()
         {
-            __bytes.Dispose();
+            //__bytes.Dispose();
         }
 
         public void Clear()
         {
             __channel = 0;
-            __bytes.Clear();
+            //__bytes.Clear();
         }
 
-        public void Init(ref DataStreamReader reader)
+        /*public void Init(ref DataStreamReader reader)
         {
             __bytes.Resize(reader.Length - reader.GetBytesRead(), NativeArrayOptions.UninitializedMemory);
             reader.ReadBytes(AsArray());
-        }
+        }*/
 
         public void SendHeader(
             bool isSendOthers,
             int pipelineIndex,
             int type,
-            int identityIndex,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             if (sendBuffer.BeginWrite(pipelineIndex, out var writer))
             {
-                __WriteHeader(isSendOthers, type, identityIndex, ref writer);
+                __WriteHeader(isSendOthers, type, sendBuffer.payload, ref writer);
 
                 sendBuffer.EndWrite(writer);
             }
@@ -80,14 +87,12 @@ namespace ZG
         public void Create(
             int pipelineIndexToSelf,
             int pipelineIndexToOthers,
-            int identityIndex,
             int channel,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             __CreateOrJoin((int)NetworkRelayMessageType.Create, 
                 pipelineIndexToSelf, 
                 pipelineIndexToOthers, 
-                identityIndex, 
                 channel, 
                 sendBuffer);
         }
@@ -95,14 +100,12 @@ namespace ZG
         public void Join(
             int pipelineIndexToSelf,
             int pipelineIndexToOthers,
-            int identityIndex,
             int channel,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             __CreateOrJoin((int)NetworkRelayMessageType.Join, 
                 pipelineIndexToSelf, 
                 pipelineIndexToOthers, 
-                identityIndex, 
                 channel, 
                 sendBuffer);
         }
@@ -110,13 +113,12 @@ namespace ZG
         public void Leave(
             int pipelineIndexToSelf,
             int pipelineIndexToOthers,
-            int identityIndex,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             if (sendBuffer.RemoveChannel(__channel))
             {
-                SendHeader(false, pipelineIndexToSelf, (int)NetworkRelayMessageType.Leave, identityIndex, sendBuffer);
-                SendHeader(true, pipelineIndexToOthers, (int)NetworkRelayMessageType.Leave, identityIndex, sendBuffer);
+                SendHeader(false, pipelineIndexToSelf, (int)NetworkRelayMessageType.Leave, sendBuffer);
+                SendHeader(true, pipelineIndexToOthers, (int)NetworkRelayMessageType.Leave, sendBuffer);
             }
 
             __channel = 0;
@@ -126,19 +128,18 @@ namespace ZG
             int pipelineIndex,
             int type,
             int relayType,
-            int identityIndex,
             ref DataStreamReader reader,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             if (sendBuffer.BeginWrite(pipelineIndex, out var writer))
             {
-                SendRelay(type, relayType, identityIndex, ref reader, ref writer);
+                SendRelay(type, relayType, sendBuffer.ID, ref reader, ref writer);
 
                 sendBuffer.EndWrite(writer);
             }
         }
 
-        public NativeArray<byte> AsArray()
+        /*public NativeArray<byte> AsArray()
         {
             NativeArray<byte> bytes;
             unsafe
@@ -148,84 +149,69 @@ namespace ZG
             }
 
             return bytes;
-        }
+        }*/
 
-        private void __WriteHeader(bool isSendOthers, int type, int identityIndex, ref DataStreamWriter writer)
+        private void __WriteHeader(bool isSendOthers, int type, in NativeArray<byte> payload, ref DataStreamWriter writer)
         {
             var streamCompressionModel = StreamCompressionModel.Default;
             writer.WritePackedInt(type, streamCompressionModel);
-            writer.WritePackedInt(identityIndex, streamCompressionModel);
+            //writer.WritePackedInt(identityIndex, streamCompressionModel);
             writer.WritePackedInt(__channel, streamCompressionModel);
 
             if (isSendOthers)
-                writer.WriteBytes(AsArray());
+                writer.WriteBytes(payload);
         }
         
         private void __CreateOrJoin(
             int type, 
             int pipelineIndexToSelf,
             int pipelineIndexToOthers,
-            int identityIndex,
             int channel,
             NetworkServerSendBufferWrapper sendBuffer)
         {
             if (!sendBuffer.AddChannel(channel))
                 return;
 
-            Leave(pipelineIndexToSelf, pipelineIndexToOthers, identityIndex, sendBuffer);
+            Leave(pipelineIndexToSelf, pipelineIndexToOthers, sendBuffer);
 
             __channel = channel;
 
-            SendHeader(false, pipelineIndexToSelf, type, identityIndex, sendBuffer);
-            SendHeader(true, pipelineIndexToOthers, type, identityIndex, sendBuffer);
+            SendHeader(false, pipelineIndexToSelf, type, sendBuffer);
+            SendHeader(true, pipelineIndexToOthers, type, sendBuffer);
         }
     }
 
     public struct NetworkRelayServerListener : INetworkServerListener
     {
-        public NativeHashMap<NetworkConnection, int> identityIndices;
+        public NativeHashMap<uint, int> identityIndices;
 
         public NativeList<NetworkRelayServerIdentity> identities;
 
-        public NativeList<int> identityIndexPool;
-
-        public void Connect(in NetworkConnection connection)
+        public void Connect(in NetworkConnection connection, uint id)
         {
-            int index, length = identityIndexPool.Length;
-            if (length > 0)
-            {
-                index = identityIndexPool[--length];
-                identityIndexPool.ResizeUninitialized(length);
+            if (identityIndices.ContainsKey(id))
+                return;
 
-                identities.ElementAt(index).Clear();
-            }
-            else
-            {
-                index = identities.Length;
-                identities.Add(new NetworkRelayServerIdentity(Allocator.Persistent));
-            }
-
-            identityIndices.Add(connection, index);
+            int index = identities.Length;
+            identities.Add(new NetworkRelayServerIdentity(Allocator.Persistent));
+            identityIndices.Add(id, index);
         }
 
-        public void Disconnect(in NetworkConnection connection)
+        public void Disconnect(in NetworkConnection connection, uint id)
         {
-            identityIndexPool.Add(identityIndices[connection]);
-
-            identityIndices.Remove(connection);
+            //identityIndices.Remove(connection);
         }
     }
 
     public struct NetworkRelayServerHandler : INetworkServerHandler
     {
-        public int pipelineIndexDrop;
-        public int pipelineIndexRelay;
+        public int pipelineIndexCustom;
         public int pipelineIndexSendSelf;
         public int pipelineIndexSendOthers;
         public int pipelineIndexSendOthersFromChannel;
 
         [ReadOnly] 
-        public NativeHashMap<NetworkConnection, int> identityIndices;
+        public NativeHashMap<uint, int> identityIndices;
 
         [NativeDisableParallelForRestriction] 
         public NativeArray<NetworkRelayServerIdentity> identities;
@@ -241,12 +227,11 @@ namespace ZG
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
         {
-            var identityIndex = identityIndices[sendBuffer.Connection];
+            var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
             identity.Leave(
                 pipelineIndexSendSelf,
                 pipelineIndexSendOthersFromChannel,
-                identityIndex,
                 sendBuffer);
 
             identities[identityIndex] = identity;
@@ -255,7 +240,7 @@ namespace ZG
         public void Read(ref DataStreamReader reader,
             NetworkServerSendBufferWrapper sendBuffer)
         {
-            var identityIndex = identityIndices[sendBuffer.Connection];
+            var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
 
             DataStreamWriter writer;
@@ -264,13 +249,13 @@ namespace ZG
             switch ((NetworkRelayMessageType)type)
             {
                 case NetworkRelayMessageType.Init:
-                    identity.Init(ref reader);
-                    identities[identityIndex] = identity;
+                    //identity.Init(ref reader);
+                    //identities[identityIndex] = identity;
 
                     if (sendBuffer.BeginWrite(pipelineIndexSendSelf, out writer))
                     {
                         writer.WritePackedInt(type, streamCompressionModel);
-                        writer.WritePackedInt(identityIndex, streamCompressionModel);
+                        //writer.WritePackedInt(identityIndex, streamCompressionModel);
                         sendBuffer.EndWrite(writer);
                     }
 
@@ -279,7 +264,6 @@ namespace ZG
                     identity.Create(
                         pipelineIndexSendSelf,
                         pipelineIndexSendOthersFromChannel,
-                        identityIndex,
                         System.Threading.Interlocked.Increment(ref channelCount.AsSpan()[0]),
                         sendBuffer);
 
@@ -289,7 +273,6 @@ namespace ZG
                     identity.Join(
                         pipelineIndexSendSelf,
                         pipelineIndexSendOthersFromChannel,
-                        identityIndex,
                         reader.ReadPackedInt(streamCompressionModel), sendBuffer);
 
                     identities[identityIndex] = identity;
@@ -299,16 +282,15 @@ namespace ZG
                     identity.Leave(
                         pipelineIndexSendSelf,
                         pipelineIndexSendOthersFromChannel,
-                        identityIndex,
                         sendBuffer);
 
                     identities[identityIndex] = identity;
                     break;
                 case NetworkRelayMessageType.Drop:
-                    if (sendBuffer.BeginWrite(pipelineIndexDrop, out writer))
+                    if (sendBuffer.BeginWrite(pipelineIndexCustom, out writer))
                     {
                         writer.WritePackedInt(type, streamCompressionModel);
-                        writer.WritePackedInt(identityIndex, streamCompressionModel);
+                        writer.WritePackedUInt(sendBuffer.ID, streamCompressionModel);
                         sendBuffer.EndWrite(writer);
                     }
                     break;
@@ -320,7 +302,7 @@ namespace ZG
                         if (identity.channel != channel)
                             continue;
 
-                        identity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Query, i,
+                        identity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Query,
                             sendBuffer);
                     }
 
@@ -330,15 +312,15 @@ namespace ZG
                     switch ((NetworkRelayType)relayType)
                     {
                         case NetworkRelayType.All:
-                            identity.Relay(pipelineIndexSendOthers, type, relayType, identityIndex, ref reader,
+                            identity.Relay(pipelineIndexSendOthers, type, relayType, ref reader,
                                 sendBuffer);
                             break;
                         case NetworkRelayType.Channel:
-                            identity.Relay(pipelineIndexSendOthersFromChannel, type, relayType, identityIndex,
+                            identity.Relay(pipelineIndexSendOthersFromChannel, type, relayType,
                                 ref reader, sendBuffer);
                             break;
                         default:
-                            identity.Relay(pipelineIndexRelay, type, relayType, identityIndex, ref reader, sendBuffer);
+                            identity.Relay(pipelineIndexCustom, type, relayType, ref reader, sendBuffer);
                             break;
                     }
 
@@ -349,13 +331,12 @@ namespace ZG
 
     public struct NetworkRelayServerBufferHandler : INetworkServerBufferHandler
     {
-        public int pipelineIndexDrop;
-        public int pipelineIndexRelay;
+        public int pipelineIndexCustom;
         public int pipelineIndexSendSelf;
         public int pipelineIndexSendOthersFromChannel;
 
         [ReadOnly] 
-        public NativeHashMap<NetworkConnection, int> identityIndices;
+        public NativeHashMap<uint, int> identityIndices;
 
         [NativeDisableParallelForRestriction] 
         public NativeArray<NetworkRelayServerIdentity> identities;
@@ -368,55 +349,56 @@ namespace ZG
             ref NetworkDriver.Concurrent driver, 
             ref NetworkServerSendBuffer.Concurrent sendBuffer)
         {
+            var sendBufferWrapper = new NetworkServerSendBufferWrapper(destination, ref sendBuffer);
             var streamCompressionModel = StreamCompressionModel.Default;
-            if (pipelineIndex == pipelineIndexDrop)
+            if (pipelineIndex == pipelineIndexCustom)
             {
-                if (identityIndices.TryGetValue(destination, out var identityIndex) &&
-                    identityIndex == reader.ReadPackedInt(streamCompressionModel))
+                int type = reader.ReadPackedInt(streamCompressionModel);
+                switch ((NetworkRelayMessageType)type)
                 {
-                    var identity = identities[identityIndex];
-                    identity.Leave(
-                        pipelineIndexSendSelf,
-                        pipelineIndexSendOthersFromChannel,
-                        identityIndex,
-                        new NetworkServerSendBufferWrapper(destination, ref sendBuffer));
+                    case NetworkRelayMessageType.Drop:
+                        if (sendBufferWrapper.ID == reader.ReadPackedUInt(streamCompressionModel))
+                        {
+                            int identityIndex = identityIndices[sendBufferWrapper.ID];
+                            var identity = identities[identityIndex];
+                            identity.Leave(
+                                pipelineIndexSendSelf,
+                                pipelineIndexSendOthersFromChannel,
+                                sendBufferWrapper);
 
-                    identities[identityIndex] = identity;
-                }
-            }
-            else if(pipelineIndex == pipelineIndexRelay)
-            {
-                int type = reader.ReadPackedInt(streamCompressionModel),
-                    relayType = reader.ReadPackedInt(streamCompressionModel);
+                            identities[identityIndex] = identity;
+                        }
+                        break;
+                    default:
+                        int relayType = reader.ReadPackedInt(streamCompressionModel);
+                        if (((NetworkRelayType)relayType).RelayID() == sendBufferWrapper.ID)
+                        {
+                            int result = driver.BeginSend(destination, out var writer);
+                            if (result < 0)
+                            {
+                                NetworkSendBuffer.LogError((StatusCode)result);
 
-                if (relayType >= (int)NetworkRelayType.Identity &&
-                    identityIndices.TryGetValue(destination, out var identityIndex) &&
-                    identityIndex == relayType)
-                {
-                    int result = driver.BeginSend(destination, out var writer);
-                    if (result < 0)
-                    {
-                        NetworkSendBuffer.LogError((StatusCode)result);
+                                return false;
+                            }
 
-                        return false;
-                    }
+                            NetworkRelayServerIdentity.SendRelay(
+                                type,
+                                relayType,
+                                sendBuffer[source],
+                                ref reader,
+                                ref writer);
 
-                    NetworkRelayServerIdentity.SendRelay(
-                        type,
-                        relayType,
-                        reader.ReadPackedInt(streamCompressionModel),
-                        ref reader,
-                        ref writer);
+                            result = driver.EndSend(writer);
+                            if (result < 0)
+                            {
+                                NetworkSendBuffer.LogError((StatusCode)result);
 
-                    result = driver.EndSend(writer);
-                    if (result < 0)
-                    {
-                        NetworkSendBuffer.LogError((StatusCode)result);
+                                return false;
+                            }
 
-                        return false;
-                    }
-
-                    return true;
+                            return true;
+                        }
+                        break;
                 }
             }
 
@@ -426,8 +408,7 @@ namespace ZG
 
     public struct NetworkRelayServer : IComponentData
     {
-        private int __pipelineIndexDrop;
-        private int __pipelineIndexRelay;
+        private int __pipelineIndexCustom;
         private int __pipelineIndexSendSelf;
         private int __pipelineIndexSendOthers;
         private int __pipelineIndexSendOthersFromChannel;
@@ -437,11 +418,11 @@ namespace ZG
 
         private NativeArray<int> __channelCount;
 
-        private NativeList<int> __identityIndexPool;
+        //private NativeList<int> __identityIndexPool;
 
         private NativeList<NetworkRelayServerIdentity> __identities;
 
-        private NativeHashMap<NetworkConnection, int> __identityIndices;
+        private NativeHashMap<uint, int> __identityIndices;
 
         public NetworkRelayServer(
             in NetworkSettings settings,
@@ -454,8 +435,7 @@ namespace ZG
 
             var pipeline = __instance.CreatePipeline(stages);
 
-            __pipelineIndexDrop = __sendBuffer.CreatePipeline(NetworkServerPipelineType.Custom, pipeline);
-            __pipelineIndexRelay = __sendBuffer.CreatePipeline(NetworkServerPipelineType.Custom, pipeline);
+            __pipelineIndexCustom = __sendBuffer.CreatePipeline(NetworkServerPipelineType.Custom, pipeline);
             __pipelineIndexSendSelf = __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendSelf, pipeline);
             __pipelineIndexSendOthers = __sendBuffer.CreatePipeline(NetworkServerPipelineType.SendOthers, pipeline);
             __pipelineIndexSendOthersFromChannel =
@@ -466,11 +446,11 @@ namespace ZG
 
             __channelCount[0] = 0;
 
-            __identityIndexPool = new NativeList<int>(allocator);
+            //__identityIndexPool = new NativeList<int>(allocator);
 
             __identities = new NativeList<NetworkRelayServerIdentity>(allocator);
 
-            __identityIndices = new NativeHashMap<NetworkConnection, int>(1, allocator);
+            __identityIndices = new NativeHashMap<uint, int>(1, allocator);
         }
 
         public NetworkRelayServer(
@@ -510,7 +490,7 @@ namespace ZG
             __instance.Dispose();
             __sendBuffer.Dispose();
             __channelCount.Dispose();
-            __identityIndexPool.Dispose();
+            //__identityIndexPool.Dispose();
             __identities.Dispose();
             __identityIndices.Dispose();
         }
@@ -532,12 +512,11 @@ namespace ZG
             NetworkRelayServerListener listener;
             listener.identities = __identities;
             listener.identityIndices = __identityIndices;
-            listener.identityIndexPool = __identityIndexPool;
+            //listener.identityIndexPool = __identityIndexPool;
 
             var identities = __identities.AsDeferredJobArray();
             NetworkRelayServerHandler handler;
-            handler.pipelineIndexDrop = __pipelineIndexDrop;
-            handler.pipelineIndexRelay = __pipelineIndexRelay;
+            handler.pipelineIndexCustom = __pipelineIndexCustom;
             handler.pipelineIndexSendSelf = __pipelineIndexSendSelf;
             handler.pipelineIndexSendOthers = __pipelineIndexSendOthers;
             handler.pipelineIndexSendOthersFromChannel = __pipelineIndexSendOthersFromChannel;
@@ -546,8 +525,7 @@ namespace ZG
             handler.channelCount = __channelCount;
 
             NetworkRelayServerBufferHandler bufferHandler;
-            bufferHandler.pipelineIndexDrop = __pipelineIndexDrop;
-            bufferHandler.pipelineIndexRelay = __pipelineIndexRelay;
+            bufferHandler.pipelineIndexCustom = __pipelineIndexCustom;
             bufferHandler.pipelineIndexSendSelf = __pipelineIndexSendSelf;
             bufferHandler.pipelineIndexSendOthersFromChannel = __pipelineIndexSendOthersFromChannel;
             bufferHandler.identityIndices = __identityIndices;

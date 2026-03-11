@@ -280,14 +280,14 @@ namespace ZG
 
                             break;
                         case NetworkEvent.Type.Connect:
-                            int headersLength = headers.Length - headerSize;
+                            /*int headersLength = headers.Length - headerSize;
                             if (headersLength > 0 && driver.BeginSend(header.connection, out var writer) >= 0)
                             {
                                 writer.WriteUShort((ushort)headersLength);
                                 writer.WriteBytes(headers.GetSubArray(headerSize, headersLength));
 
                                 driver.EndSend(writer);
-                            }
+                            }*/
 
                             message.type = NetworkClientMessageType.Connect;
                             message.offset = buffer.Length;
@@ -298,7 +298,7 @@ namespace ZG
                         case NetworkEvent.Type.Disconnect:
                             __LogDisconnectReason((DisconnectReason)stream.ReadByte());
 
-                            header.connection = driver.Connect(header.endpoint);
+                            header.connection = driver.Connect(header.endpoint, headers.GetSubArray(headerSize, headers.Length - headerSize));
 
                             var connections = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>())
                                 .Reinterpret<NetworkConnection>(1);
@@ -323,7 +323,7 @@ namespace ZG
 
             private void __LogDisconnectReason(DisconnectReason disconnectReason)
             {
-                UnityEngine.Debug.LogError($"DisconnectReason: {disconnectReason}");
+                UnityEngine.Debug.LogError($"DisconnectReason: {(int)disconnectReason}");
             }
         }
 
@@ -374,12 +374,12 @@ namespace ZG
             //__identities.Clear();
         }
 
-        public void Connect(in NetworkEndpoint endPoint, in NativeArray<byte> headers)
+        public void Connect(in NetworkEndpoint endPoint, in NativeArray<byte> payload)
         {
             if (NetworkConnection.State.Disconnected != connectionState)
                 __driver.Disconnect(connection);
 
-            int headerSize = UnsafeUtility.SizeOf<Header>(), headersSize = headers.IsCreated ? headers.Length : 0;
+            int headerSize = UnsafeUtility.SizeOf<Header>(), headersSize = payload.IsCreated ? payload.Length : 0;
             __headers.ResizeUninitialized(headerSize + headersSize);
             var headersArray = __headers.AsArray();
             var temp = headersArray.GetSubArray(0, headerSize).Reinterpret<Header>(1);
@@ -390,7 +390,7 @@ namespace ZG
             temp[0] = header;
             
             if(headersSize > 0)
-                NativeArray<byte>.Copy(headers, 0, headersArray, headerSize, headersSize);
+                NativeArray<byte>.Copy(payload, 0, headersArray, headerSize, headersSize);
         }
 
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)

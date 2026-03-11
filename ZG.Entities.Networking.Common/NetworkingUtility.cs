@@ -58,5 +58,37 @@ namespace ZG
 
             return stageIDs.ToArray(allocator);
         }
+
+        public static void WriteReplyHeader(this ref DataStreamWriter writer, int messageType, NetworkRelayType relayType)
+        {
+            var streamCompressionModel =  StreamCompressionModel.Default;
+            writer.WritePackedInt(messageType, streamCompressionModel);
+            writer.WritePackedInt((int)relayType, streamCompressionModel);
+            writer.Flush();
+        }
+        
+        public static void ReadReplyHeader(
+            this ref DataStreamReader reader, 
+            out int messageType, 
+            out NetworkRelayType relayType, 
+            out int identityIndex)
+        {
+            var streamCompressionModel =  StreamCompressionModel.Default;
+            messageType = reader.ReadPackedInt(streamCompressionModel);
+            relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
+            identityIndex = reader.ReadPackedInt(streamCompressionModel);
+            reader.Flush();
+        }
+        
+        public static void ReadReplyHeader(
+            this ref DataStreamReader reader, 
+            out NetworkRelayType relayType, 
+            out int identityIndex)
+        {
+            var streamCompressionModel =  StreamCompressionModel.Default;
+            relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
+            identityIndex = reader.ReadPackedInt(streamCompressionModel);
+            reader.Flush();
+        }
     }
 }

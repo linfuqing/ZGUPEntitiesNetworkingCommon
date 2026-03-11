@@ -152,9 +152,9 @@ namespace ZG
 
             public int CompareTo(Message other)
             {
-                int result = type.CompareTo(other.type);
+                int result = offset.CompareTo(other.offset);
                 if(0 == result)
-                    return offset.CompareTo(other.offset);
+                    return ((int)type).CompareTo((int)other.type);
 
                 return result;
             }

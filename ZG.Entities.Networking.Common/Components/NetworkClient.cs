@@ -56,6 +56,8 @@ namespace ZG
         private NativeList<NetworkPipeline> __pipelines;
         private NativeList<NetworkSendBuffer> __buffers;
         
+        public bool isCreated => __buffers.IsCreated;
+        
         public unsafe AllocatorManager.AllocatorHandle allocator => __pipelines.GetUnsafeList()->Allocator;
 
         public NetworkClientSendBuffer(in AllocatorManager.AllocatorHandle allocator)
@@ -330,6 +332,8 @@ namespace ZG
         private NativeList<byte> __buffer;
         private NativeParallelMultiHashMap<NetworkPipeline, Message> __messages;
 
+        public bool isCreated => __driver.IsCreated;
+
         public NetworkConnection.State connectionState => __driver.GetConnectionState(connection);
 
         public NetworkConnection connection
@@ -465,6 +469,8 @@ namespace ZG
         public NetworkClient instance => __instance;
         
         public NetworkClientSendBuffer sendBuffer => __sendBuffer;
+
+        public bool isCreated => __instance.isCreated;
 
         public NetworkClientDriver(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {

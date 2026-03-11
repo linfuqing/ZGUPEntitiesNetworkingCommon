@@ -235,7 +235,7 @@ namespace ZG
 
         public void Connect(NetworkServerSendBufferWrapper sendBuffer)
         {
-            //sendBuffer.AddChannel(0);
+            sendBuffer.AddChannel(0);
         }
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
@@ -277,7 +277,7 @@ namespace ZG
                 case NetworkRelayMessageType.Create:
                     identity.Create(
                         pipelineIndexSendSelf,
-                        pipelineIndexSendOthers,
+                        pipelineIndexSendOthersFromChannel,
                         identityIndex,
                         System.Threading.Interlocked.Increment(ref channelCount.AsSpan()[0]),
                         sendBuffer);

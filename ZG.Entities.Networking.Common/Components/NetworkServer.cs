@@ -92,6 +92,7 @@ namespace ZG
         public NetworkServerSendBuffer sendBuffer;
 
         public NativeList<NetworkConnection> connections;
+        public NativeList<NetworkConnection> connectionsToConnect;
         public NativeList<NetworkConnection> connectionsToDisconnect;
 
         public void Execute()
@@ -110,9 +111,13 @@ namespace ZG
                 
             connectionsToDisconnect.Clear();
                 
+            connectionsToConnect.Clear();
+
             NetworkConnection connection;
             while ((connection = driver.Accept()) != default)
             {
+                connectionsToConnect.Add(connection);
+                
                 connections.Add(connection);
                     
                 sendBuffer.Connect(connection);
@@ -134,14 +139,20 @@ namespace ZG
         public NativeList<NetworkConnection>.ParallelWriter connectionsToDisconnect;
 
         [ReadOnly]
+        public NativeArray<NetworkConnection> connectionsToConnect;
+
+        [ReadOnly]
         public NativeArray<NetworkConnection> connections;
 
         public void Execute(int index)
         {
             var connection = connections[index];
-
+            
             var sendBuffer = new NetworkServerSendBufferWrapper(connection, ref this.sendBuffer);
 
+            if(connectionsToConnect.IndexOf(connection) != -1)
+                handler.Connect(sendBuffer);
+            
             bool isEmpty = false;
             NetworkEvent.Type cmd;
             DataStreamReader reader;
@@ -748,6 +759,7 @@ namespace ZG
 
         private NetworkDriver __driver;
         private NativeList<NetworkConnection> __connections;
+        private NativeList<NetworkConnection> __connectionsToConnect;
         private NativeList<NetworkConnection> __connectionsToDisconnect;
 
         public NetworkServer(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
@@ -755,6 +767,7 @@ namespace ZG
             __driver = NetworkDriver.Create(settings);
 
             __connections = new NativeList<NetworkConnection>(allocator);
+            __connectionsToConnect = new NativeList<NetworkConnection>(allocator);
             __connectionsToDisconnect = new NativeList<NetworkConnection>(allocator);
         }
 
@@ -762,6 +775,7 @@ namespace ZG
         {
             __driver.Dispose();
             __connections.Dispose();
+            __connectionsToConnect.Dispose();
             __connectionsToDisconnect.Dispose();
         }
 
@@ -815,6 +829,7 @@ namespace ZG
             init.driver = __driver;
             init.sendBuffer = sendBuffer;
             init.connections = __connections;
+            init.connectionsToConnect = __connectionsToConnect;
             init.connectionsToDisconnect = __connectionsToDisconnect;
             var jobHandle = init.ScheduleByRef(inputDeps);
 
@@ -826,6 +841,7 @@ namespace ZG
             popEvents.handler = handler;
             popEvents.driver = driver;
             popEvents.sendBuffer = sendBufferConcurrent;
+            popEvents.connectionsToConnect = __connectionsToConnect.AsDeferredJobArray();
             popEvents.connectionsToDisconnect = __connectionsToDisconnect.AsParallelWriter();
             popEvents.connections = connections;
 

@@ -463,7 +463,7 @@ namespace ZG
 
             __channelCount = CollectionHelper.CreateNativeArray<int>(1, allocator);
 
-            __channelCount[0] = (int)NetworkRelayType.Identity;
+            __channelCount[0] = 0;
 
             __identityIndexPool = new NativeList<int>(allocator);
 

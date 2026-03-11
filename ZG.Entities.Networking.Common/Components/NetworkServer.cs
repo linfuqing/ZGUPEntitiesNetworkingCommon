@@ -345,7 +345,7 @@ namespace ZG
             public int payloadOffset;
             public int payloadSize;
             public int channel;
-            public FixedList32Bytes<PipelineBuffer> pipelineBuffers;
+            public FixedList64Bytes<PipelineBuffer> pipelineBuffers;
 
             public void Sort(in NativeList<Pipeline> pipelines)
             {

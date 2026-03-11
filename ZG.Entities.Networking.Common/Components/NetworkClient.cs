@@ -385,7 +385,7 @@ namespace ZG
             var temp = headersArray.GetSubArray(0, headerSize).Reinterpret<Header>(1);
             
             Header header;
-            header.connection = __driver.Connect(endPoint);
+            header.connection = __driver.Connect(endPoint, payload);
             header.endpoint = endPoint;
             temp[0] = header;
             

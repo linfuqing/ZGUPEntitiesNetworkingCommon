@@ -31,14 +31,13 @@ namespace ZG
             writer.WritePackedInt(relayType, streamCompressionModel);
             writer.WritePackedUInt(id, streamCompressionModel);
             writer.Flush();
-            reader.Flush();
             
-            int numBytes = reader.Length - reader.GetBytesRead();
+            int byteOffset = reader.GetBytesRead(), numBytes = reader.Length - byteOffset;
 
             NativeArray<byte> bytes;
             unsafe
             {
-                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>(reader.GetUnsafeReadOnlyPtr(), numBytes,
+                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>((byte*)reader.GetUnsafeReadOnlyPtr() + byteOffset, numBytes,
                     Allocator.None, true);
             }
 

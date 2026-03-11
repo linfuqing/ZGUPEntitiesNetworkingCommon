@@ -277,7 +277,7 @@ namespace ZG
                 case NetworkRelayMessageType.Create:
                     identity.Create(
                         pipelineIndexSendSelf,
-                        pipelineIndexSendOthersFromChannel,
+                        pipelineIndexSendOthers,
                         identityIndex,
                         System.Threading.Interlocked.Increment(ref channelCount.AsSpan()[0]),
                         sendBuffer);

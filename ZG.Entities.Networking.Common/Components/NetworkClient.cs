@@ -246,7 +246,7 @@ namespace ZG
             public void Execute()
             {
                 int headerSize = UnsafeUtility.SizeOf<Header>();
-                var header = headers.GetSubArray(0, headerSize).Reinterpret<Header>(1)[0];
+                var header = headers.Length < headerSize ? default : headers.GetSubArray(0, headerSize).Reinterpret<Header>(1)[0];
 
                 buffer.Clear();
 

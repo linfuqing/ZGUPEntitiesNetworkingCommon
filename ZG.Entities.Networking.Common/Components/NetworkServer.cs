@@ -349,14 +349,18 @@ namespace ZG
 
             public void Sort(in NativeList<Pipeline> pipelines)
             {
-                Comparer comparer;
-                comparer.pipelines = pipelines;
-
-                unsafe
+                using (var array = pipelineBuffers.ToNativeArray(Allocator.Temp))
                 {
-                    NativeSortExtension.Sort(
-                        (PipelineBuffer*)((byte*)UnsafeUtility.AddressOf(ref pipelineBuffers) + UnsafeUtility.SizeOf<ushort>()),
-                        pipelineBuffers.Length, comparer);
+                    Comparer comparer;
+                    comparer.pipelines = pipelines;
+
+                    array.Sort(comparer);
+                    
+                    pipelineBuffers.Clear();
+                    unsafe
+                    {
+                        pipelineBuffers.AddRange(array.GetUnsafeReadOnlyPtr(), array.Length);
+                    }
                 }
             }
         }

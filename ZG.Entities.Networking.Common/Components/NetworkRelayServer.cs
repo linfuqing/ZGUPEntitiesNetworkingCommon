@@ -222,18 +222,37 @@ namespace ZG
         {
             //空的时候才能Or
             //sendBuffer.AddChannel(0);
+            
+            var identityIndex = identityIndices[sendBuffer.ID];
+            var identity = identities[identityIndex];
+            int channel = identity.channel;
+            if (channel != 0)
+            {
+                int numIdentities = identities.Length;
+                NetworkRelayServerIdentity channelIdentity;
+                for(int i = 0; i < numIdentities; ++i)
+                {
+                    channelIdentity = identities[i];
+                    if (channelIdentity.channel != channel)
+                        continue;
+
+                    channelIdentity.SendHeader(i != identityIndex, pipelineIndexSendSelf,
+                        (int)NetworkRelayMessageType.Join,
+                        sendBuffer);
+                }
+            }
         }
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
         {
-            var identityIndex = identityIndices[sendBuffer.ID];
+            /*var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
             identity.Leave(
                 pipelineIndexSendSelf,
                 pipelineIndexSendOthersFromChannel,
                 sendBuffer);
 
-            identities[identityIndex] = identity;
+            identities[identityIndex] = identity;*/
         }
 
         public void Read(ref DataStreamReader reader,
@@ -242,9 +261,10 @@ namespace ZG
             var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
 
+            NetworkRelayServerIdentity channelIdentity;
             DataStreamWriter writer;
             var streamCompressionModel = StreamCompressionModel.Default;
-            int type = reader.ReadPackedInt(streamCompressionModel);
+            int type = reader.ReadPackedInt(streamCompressionModel), channel, numIdentities;
             switch ((NetworkRelayMessageType)type)
             {
                 case NetworkRelayMessageType.Init:
@@ -269,12 +289,27 @@ namespace ZG
                     identities[identityIndex] = identity;
                     break;
                 case NetworkRelayMessageType.Join:
+                    channel = reader.ReadPackedInt(streamCompressionModel);
                     identity.Join(
                         pipelineIndexSendSelf,
                         pipelineIndexSendOthersFromChannel,
-                        reader.ReadPackedInt(streamCompressionModel), sendBuffer);
+                        channel, sendBuffer);
 
                     identities[identityIndex] = identity;
+
+                    numIdentities = identities.Length;
+                    for(int i = 0; i < numIdentities; ++i)
+                    {
+                        if(i == identityIndex)
+                            continue;
+                        
+                        channelIdentity = identities[i];
+                        if (channelIdentity.channel != channel)
+                            continue;
+
+                        channelIdentity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Join,
+                            sendBuffer);
+                    }
 
                     break;
                 case NetworkRelayMessageType.Leave:
@@ -294,14 +329,15 @@ namespace ZG
                     }
                     break;
                 case NetworkRelayMessageType.Query:
-                    int channel = reader.ReadPackedInt(streamCompressionModel), numIdentities = identities.Length;
-                    for (int i = 0; i < numIdentities; ++i)
+                    channel = reader.ReadPackedInt(streamCompressionModel);
+                    numIdentities = identities.Length;
+                    for(int i = 0; i < numIdentities; ++i)
                     {
-                        identity = identities[i];
-                        if (identity.channel != channel)
+                        channelIdentity = identities[i];
+                        if (channelIdentity.channel != channel)
                             continue;
 
-                        identity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Query,
+                        channelIdentity.SendHeader(true, pipelineIndexSendSelf, (int)NetworkRelayMessageType.Query,
                             sendBuffer);
                     }
 

@@ -51,8 +51,6 @@ namespace ZG
     {
         public uint ID;
         
-        public readonly NetworkConnection Connection;
-        
         private NetworkServerSendBuffer.Concurrent __sendBuffer;
 
         public NativeArray<byte> payload => __sendBuffer.GetPayload(ID);
@@ -61,7 +59,6 @@ namespace ZG
             ref NetworkServerSendBuffer.Concurrent sendBuffer)
         {
             ID = sendBuffer[connection];
-            Connection = connection;
             __sendBuffer = sendBuffer;
         }
 
@@ -102,36 +99,61 @@ namespace ZG
 
         public void Execute()
         {
-            uint id;
-            int connectionIndex;
             foreach (var connectionToDisconnect in connectionsToDisconnect)
-            {
-                connectionIndex = connections.IndexOf(connectionToDisconnect);
-                if(connectionIndex != -1)
-                    connections.RemoveAtSwapBack(connectionIndex);
-                    
-                id = sendBuffer.Disconnect(connectionToDisconnect);
-                
-                listener.Disconnect(connectionToDisconnect, id);
-            }
+                __Disconnect(connectionToDisconnect);
                 
             connectionsToDisconnect.Clear();
                 
             connectionsToConnect.Clear();
 
-            NetworkConnection connection;
+            uint id;
+            NetworkConnection connection, temp;
             while ((connection = driver.Accept(out var payload)) != default)
             {
+                temp = connection;
+                id = sendBuffer.Connect(ref temp, payload);
+                if (id == 0)
+                {
+                    if (NetworkConnection.State.Connected == driver.GetConnectionState(temp))
+                    {
+                        driver.Disconnect(connection);
+                        
+                        continue;
+                    }
+                    
+                    __Disconnect(temp);
+                    
+                    temp = connection;
+                    id = sendBuffer.Connect(ref temp, payload);
+                }
+
+                if (id == 0)
+                {
+                    if(temp == connection)
+                        driver.Disconnect(connection);
+                    
+                    continue;
+                }
+
                 connectionsToConnect.Add(connection);
                 
                 connections.Add(connection);
-                
-                id = sendBuffer.Connect(connection, payload);
                 
                 listener.Connect(connection, id);
             }
 
             connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, connections.Length);
+        }
+        
+        private void __Disconnect(in NetworkConnection connection)
+        {
+            int connectionIndex = connections.IndexOf(connection);
+            if(connectionIndex != -1)
+                connections.RemoveAtSwapBack(connectionIndex);
+                    
+            uint id = sendBuffer.Disconnect(connection);
+                
+            listener.Disconnect(connection, id);
         }
     }
 
@@ -612,6 +634,7 @@ namespace ZG
         private NativeList<NetworkSendBuffer> __buffers;
         private NativeHashMap<uint, Index> __indices;
         private NativeHashMap<NetworkConnection, uint> __ids;
+        private NativeHashMap<uint, NetworkConnection> __connections;
 
         public unsafe AllocatorManager.AllocatorHandle allocator => __pipelines.GetUnsafeList()->Allocator;
 
@@ -629,6 +652,8 @@ namespace ZG
             __indices = new NativeHashMap<uint, Index>(1, allocator);
 
             __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
+
+            __connections = new NativeHashMap<uint, NetworkConnection>(1, allocator);
         }
 
         public void Dispose()
@@ -650,14 +675,16 @@ namespace ZG
             __indices.Dispose();
 
             __ids.Dispose();
+
+            __connections.Dispose();
         }
 
-        public void Clear()
+        /*public void Clear()
         {
             int length = math.min(__pipelines.Length, __buffers.Length);
             for (int i = 0; i < length; ++i)
                 __buffers.ElementAt(i).Clear();
-        }
+        }*/
 
         public Concurrent AsConcurrent() => new Concurrent(ref this);
 
@@ -697,15 +724,35 @@ namespace ZG
             return result;
         }
 
-        public uint Connect(in NetworkConnection connection, in NativeArray<byte> payload)
+        public uint Connect(ref NetworkConnection connection, in NativeArray<byte> payload)
         {
             uint id = new DataStreamReader(payload).ReadPackedUInt(StreamCompressionModel.Default);
-            
+
+            if (__connections.TryGetValue(id, out var originConnection))
+            {
+                UnityEngine.Debug.LogError($"connection id mismatch: {id}");
+                
+                connection = originConnection;
+                
+                return 0;
+            }
+
             __ids.Add(connection, id);
 
             if (__indices.TryGetValue(id, out var index))
             {
-                NativeArray<byte>.Copy(payload, 0, __payloads.AsArray(), index.payloadOffset, index.payloadSize);
+                if (index.payloadSize != payload.Length)
+                {
+                    UnityEngine.Debug.LogError($"payload size mismatch: {index.payloadSize} != {payload.Length}");
+
+                    return 0;
+                }
+                
+                NativeArray<byte>.Copy(payload, 
+                    0, 
+                    __payloads.AsArray(), 
+                    index.payloadOffset, 
+                    index.payloadSize);
                 
                 return id;
             }

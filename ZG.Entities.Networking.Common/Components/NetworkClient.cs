@@ -181,6 +181,13 @@ namespace ZG
                 Message = message;
                 __buffer = client.__buffer;
             }
+            
+            
+            public MessageElement(in Message message, in Messages messages)
+            {
+                Message = message;
+                __buffer = messages._buffer;
+            }
         }
 
         public struct MessageEnumerator

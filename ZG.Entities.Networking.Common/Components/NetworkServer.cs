@@ -736,6 +736,8 @@ namespace ZG
                 
                 return 0;
             }
+            
+            __connections.Add(id, connection);
 
             __ids.Add(connection, id);
 
@@ -786,6 +788,7 @@ namespace ZG
         public uint Disconnect(in NetworkConnection connection)
         {
             uint id = __ids[connection];
+            __connections.Remove(id);
             __ids.Remove(connection);
             return id;
         }

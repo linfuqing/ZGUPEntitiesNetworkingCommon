@@ -121,6 +121,8 @@ namespace ZG
 
             bytes = __AsArray(byteOffset + UnsafeUtility.SizeOf<ushort>(), __index);
 
+            ++__index;
+
             return true;
         }
 

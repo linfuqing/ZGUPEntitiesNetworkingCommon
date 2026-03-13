@@ -38,7 +38,7 @@ namespace ZG
             
             public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
             {
-                int bufferIndex = pipelineIndex * JobsUtility.JobWorkerMaximumCount + _threadIndex;
+                int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount + _threadIndex;
                 var buffer = __buffers[bufferIndex];
                 
                 bool result = buffer.BeginWrite(out writer, capacity);

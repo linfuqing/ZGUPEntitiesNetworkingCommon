@@ -4,6 +4,7 @@ using Unity.Burst;
 using Unity.Entities;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
+using Unity.Jobs.LowLevel.Unsafe;
 using Unity.Mathematics;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
@@ -25,29 +26,36 @@ namespace ZG
             [NativeDisableParallelForRestriction]
             private NativeArray<NetworkSendBuffer> __buffers;
 
+            [NativeSetThreadIndex]
+            internal int _threadIndex;
+
             public ParallelWriter(ref NetworkClientSendBuffer buffer)
             {
                 __buffers = buffer.__buffers.AsDeferredJobArray();
+
+                _threadIndex = 0;
             }
             
             public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
             {
-                var buffer = __buffers[pipelineIndex];
+                int bufferIndex = pipelineIndex * JobsUtility.JobWorkerMaximumCount + _threadIndex;
+                var buffer = __buffers[bufferIndex];
+                
                 bool result = buffer.BeginWrite(out writer, capacity);
 
-                writer.m_SendHandleData = (IntPtr)pipelineIndex;
+                writer.m_SendHandleData = (IntPtr)bufferIndex;
 
-                __buffers[pipelineIndex] = buffer;
+                __buffers[bufferIndex] = buffer;
 
                 return result;
             }
 
             public void EndWrite(in DataStreamWriter writer)
             {
-                int pipelineIndex = (int)writer.m_SendHandleData;
-                var buffer = __buffers[pipelineIndex];
+                int bufferIndex = (int)writer.m_SendHandleData;
+                var buffer = __buffers[bufferIndex];
                 buffer.EndWrite(writer);
-                __buffers[pipelineIndex] = buffer;
+                __buffers[bufferIndex] = buffer;
             }
 
         }
@@ -106,16 +114,19 @@ namespace ZG
             
             __pipelines.Add(pipeline);
             
-            __buffers.Add(new NetworkSendBuffer(allocator));
+            for(int i = 0; i < JobsUtility.MaxJobThreadCount; ++i)
+                __buffers.Add(new NetworkSendBuffer(allocator));
 
             return result;
         }
 
         public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
         {
-            bool result = __buffers.ElementAt(pipelineIndex).BeginWrite(out writer, capacity);
+            int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount;
+            
+            bool result = __buffers.ElementAt(bufferIndex).BeginWrite(out writer, capacity);
 
-            writer.m_SendHandleData = (IntPtr)pipelineIndex;
+            writer.m_SendHandleData = (IntPtr)bufferIndex;
 
             return result;
         }
@@ -127,9 +138,9 @@ namespace ZG
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
         {
-            int length = math.min(__pipelines.Length, __buffers.Length);
+            int length = __buffers.Length;
             for (int i = 0; i < length; ++i)
-                __buffers.ElementAt(i).Apply(connection, __pipelines[i], ref driver);
+                __buffers.ElementAt(i).Apply(connection, __pipelines[i / JobsUtility.MaxJobThreadCount], ref driver);
         }
     }
     

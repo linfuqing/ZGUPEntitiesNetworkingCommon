@@ -51,6 +51,7 @@ namespace ZG
                     _connectTimeoutMS,
                     _maxConnectAttempts,
                     _disconnectTimeoutMS,
+                    _heartbeatTimeoutMS, 
                     _reconnectionTimeoutMS,
                     //_maxFrameTimeMS,
                     Mathf.CeilToInt(Time.maximumDeltaTime * 1000), 

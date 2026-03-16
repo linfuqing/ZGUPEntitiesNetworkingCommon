@@ -225,7 +225,8 @@ namespace ZG
                         break;
                     case NetworkEvent.Type.Disconnect:
 
-                        __LogDisconnectReason(connection, (DisconnectReason)reader.ReadByte());
+                        var disconnectReason = (DisconnectReason)reader.ReadByte();
+                        __LogDisconnectReason(connection, disconnectReason);
 
                         handler.Disconnect(sendBuffer);
 

@@ -314,19 +314,27 @@ namespace ZG
                             messages.Add(pipeline, message);
                             break;
                         case NetworkEvent.Type.Disconnect:
-                            __LogDisconnectReason((DisconnectReason)stream.ReadByte());
+                            var disconnectReason = (DisconnectReason)stream.ReadByte();
+                            __LogDisconnectReason(disconnectReason);
 
-                            header.connection = driver.Connect(header.endpoint, headers.GetSubArray(headerSize, headers.Length - headerSize));
+                            switch (disconnectReason)
+                            {
+                                case DisconnectReason.Timeout:
+                                    driver.Disconnect(header.connection);
+                                    
+                                    header.connection = driver.Connect(header.endpoint, headers.GetSubArray(headerSize, headers.Length - headerSize));
 
-                            var connections = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>())
-                                .Reinterpret<NetworkConnection>(1);
-                            connections[0] = header.connection;
+                                    var connections = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>())
+                                        .Reinterpret<NetworkConnection>(1);
+                                    connections[0] = header.connection;
                             
-                            message.type = NetworkClientMessageType.Disconnect;
-                            message.offset = buffer.Length;
-                            message.size = 0;
+                                    message.type = NetworkClientMessageType.Disconnect;
+                                    message.offset = buffer.Length;
+                                    message.size = 0;
 
-                            messages.Add(pipeline, message);
+                                    messages.Add(pipeline, message);
+                                    break;
+                            }
                             break;
                     }
                 } while (!isEmpty);

@@ -116,9 +116,11 @@ namespace ZG
                 {
                     if (NetworkConnection.State.Connected == driver.GetConnectionState(temp))
                     {
-                        driver.Disconnect(connection);
+                        /*driver.Disconnect(connection);
                         
-                        continue;
+                        continue;*/
+                        
+                        driver.Disconnect(temp);
                     }
                     
                     __Disconnect(temp);

@@ -18,8 +18,8 @@ namespace ZG
         internal int _heartbeatTimeoutMS = 500;
         [SerializeField]
         internal int _reconnectionTimeoutMS = 2000;
-        [SerializeField]
-        internal int _maxFrameTimeMS = 0;
+        //[SerializeField]
+        //internal int _maxFrameTimeMS = 0;
         [SerializeField]
         internal int _fixedFrameTimeMS = 0;
         [SerializeField]
@@ -52,7 +52,8 @@ namespace ZG
                     _maxConnectAttempts,
                     _disconnectTimeoutMS,
                     _reconnectionTimeoutMS,
-                    _maxFrameTimeMS,
+                    //_maxFrameTimeMS,
+                    Mathf.CeilToInt(Time.maximumDeltaTime * 1000), 
                     _fixedFrameTimeMS,
                     _receiveQueueCapacity,
                     _sendQueueCapacity);

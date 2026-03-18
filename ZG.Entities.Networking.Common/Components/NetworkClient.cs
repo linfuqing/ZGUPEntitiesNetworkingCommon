@@ -158,9 +158,14 @@ namespace ZG
             public int offset;
             public int size;
 
+            public NativeArray<byte> AsArray(in NativeArray<byte> buffer)
+            {
+                return buffer.GetSubArray(offset, size);
+            }
+
             public DataStreamReader Read(in NativeArray<byte> buffer)
             {
-                return new DataStreamReader(buffer.GetSubArray(offset, size));
+                return new DataStreamReader(AsArray(buffer));
             }
 
             public int CompareTo(Message other)
@@ -173,31 +178,34 @@ namespace ZG
             }
         }
 
-        public struct MessageElement
+        public struct MessageElement : IComparable<MessageElement>
         {
             public readonly Message Message;
                 
-            private NativeList<byte> __buffer;
-                
-            public DataStreamReader reader => Message.Read(__buffer.AsArray());
+            private NativeArray<byte> __buffer;
+            
+            public DataStreamReader reader => Message.Read(__buffer);
 
-            internal MessageElement(in Message message, in NativeList<byte> buffer)
+            public MessageElement(in Message message, in NativeArray<byte> buffer)
             {
                 Message = message;
                 __buffer = buffer;
             }
 
-            public MessageElement(in Message message, in NetworkClient client)
-            {
-                Message = message;
-                __buffer = client.__buffer;
-            }
-            
-            
             public MessageElement(in Message message, in Messages messages)
             {
                 Message = message;
-                __buffer = messages._buffer;
+                __buffer = messages._buffer.AsDeferredJobArray();
+            }
+
+            public NativeArray<byte> AsArray()
+            {
+                return Message.AsArray(__buffer);
+            }
+            
+            public int CompareTo(MessageElement other)
+            {
+                return Message.offset.CompareTo(other.Message.offset);
             }
         }
 
@@ -366,6 +374,8 @@ namespace ZG
                     .GetSubArray(0, size).Reinterpret<NetworkConnection>(1)[0];
             }
         }
+        
+        public NativeArray<byte> buffer => __buffer.AsDeferredJobArray();
 
         public NetworkClient(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {

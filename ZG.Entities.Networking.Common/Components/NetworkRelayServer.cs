@@ -14,6 +14,8 @@ namespace ZG
 {
     public struct NetworkRelayServerIdentity
     {
+        public readonly uint ID;
+        
         private int __channel;
         //private UnsafeList<byte> __bytes;
 
@@ -46,8 +48,10 @@ namespace ZG
             reader.SeekSet(reader.Length);
         }
 
-        public NetworkRelayServerIdentity(in AllocatorManager.AllocatorHandle allocator)
+        public NetworkRelayServerIdentity(uint id, in AllocatorManager.AllocatorHandle allocator)
         {
+            ID = id;
+            
             __channel = 0;
             //__bytes = new UnsafeList<byte>(1, allocator);
         }
@@ -77,7 +81,7 @@ namespace ZG
         {
             if (sendBuffer.BeginWrite(pipelineIndex, out var writer))
             {
-                __WriteHeader(isSendOthers, type, sendBuffer.payload, ref writer);
+                __WriteHeader(isSendOthers, type, sendBuffer.GetPayload(ID), ref writer);
 
                 sendBuffer.EndWrite(writer);
             }
@@ -192,7 +196,7 @@ namespace ZG
                 return;
 
             int index = identities.Length;
-            identities.Add(new NetworkRelayServerIdentity(Allocator.Persistent));
+            identities.Add(new NetworkRelayServerIdentity(id, Allocator.Persistent));
             identityIndices.Add(id, index);
         }
 
@@ -344,6 +348,8 @@ namespace ZG
                     break;
                 default:
                     int relayType = reader.ReadPackedInt(streamCompressionModel);
+                    
+                    UnityEngine.Debug.LogError($"Relay {type} :{(NetworkRelayType)relayType} : {identityIndex}");
                     switch ((NetworkRelayType)relayType)
                     {
                         case NetworkRelayType.All:

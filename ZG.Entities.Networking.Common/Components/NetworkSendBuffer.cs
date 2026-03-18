@@ -10,6 +10,8 @@ namespace ZG
         private int __index;
         private UnsafeList<int> __sizes;
         private UnsafeList<byte> __bytes;
+        
+        public bool isEmpty => __index >= __sizes.Length;
 
         public NetworkSendBuffer(in AllocatorManager.AllocatorHandle allocator)
         {

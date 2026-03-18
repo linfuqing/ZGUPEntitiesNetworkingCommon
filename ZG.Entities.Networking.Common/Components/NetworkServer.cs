@@ -53,13 +53,18 @@ namespace ZG
         
         private NetworkServerSendBuffer.Concurrent __sendBuffer;
 
-        public NativeArray<byte> payload => __sendBuffer.GetPayload(ID);
+        //public NativeArray<byte> payload => __sendBuffer.GetPayload(ID);
 
         internal NetworkServerSendBufferWrapper(in NetworkConnection connection,
             ref NetworkServerSendBuffer.Concurrent sendBuffer)
         {
             ID = sendBuffer[connection];
             __sendBuffer = sendBuffer;
+        }
+
+        public NativeArray<byte> GetPayload(uint id)
+        {
+            return __sendBuffer.GetPayload(id);
         }
 
         public bool AddChannel(int value)
@@ -574,6 +579,10 @@ namespace ZG
                                      tempChannel.And(channel)))
                                 {
                                     buffer = __buffers[tempPipelineBuffer.buffer];
+                                    
+                                    /*if(!buffer.isEmpty)
+                                        UnityEngine.Debug.LogError($"{tempConnection} Send To {connection}");*/
+                                    
                                     if (!buffer.Apply(connection, tempPipeline.value, ref driver))
                                     {
                                         foreach (var pipelineBuffer in index.pipelineBuffers)
@@ -887,6 +896,9 @@ namespace ZG
             where TBufferHandler : unmanaged, INetworkServerBufferHandler
         {
             var driver = __driver.ToConcurrent();
+            
+            var jobHandle = __driver.ScheduleUpdate(inputDeps);
+
             var sendBufferConcurrent = sendBuffer.AsConcurrent();
 
             NetworkServerInitJob<TListener> init;
@@ -896,12 +908,10 @@ namespace ZG
             init.connections = __connections;
             init.connectionsToConnect = __connectionsToConnect;
             init.connectionsToDisconnect = __connectionsToDisconnect;
-            var jobHandle = init.ScheduleByRef(inputDeps);
+            jobHandle = init.ScheduleByRef(jobHandle);
 
             var connections = __connections.AsDeferredJobArray();
             
-            jobHandle = __driver.ScheduleUpdate(jobHandle);
-
             NetworkServerPopEventsJob<THandler> popEvents;
             popEvents.handler = handler;
             popEvents.driver = driver;
@@ -919,11 +929,15 @@ namespace ZG
             send.sendBuffer = sendBufferConcurrent;
             jobHandle = send.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
             
+            var result = __driver.ScheduleFlushSend(jobHandle);
+            
             Clear clear;
             clear.connections = connections;
             clear.sendBuffer = sendBufferConcurrent;
+
+            jobHandle = clear.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
             
-            return clear.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
+            return JobHandle.CombineDependencies(jobHandle, result);
         }
     }
 }

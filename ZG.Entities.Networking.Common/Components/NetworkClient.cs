@@ -195,7 +195,7 @@ namespace ZG
             public MessageElement(in Message message, in Messages messages)
             {
                 Message = message;
-                __buffer = messages._buffer.AsDeferredJobArray();
+                __buffer = messages._buffer.AsArray();
             }
 
             public NativeArray<byte> AsArray()

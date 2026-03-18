@@ -118,6 +118,9 @@ namespace ZG
             int pipelineIndexToOthers,
             NetworkServerSendBufferWrapper sendBuffer)
         {
+            if (__channel == 0)
+                return;
+            
             if (sendBuffer.RemoveChannel(__channel))
             {
                 SendHeader(false, pipelineIndexToSelf, (int)NetworkRelayMessageType.Leave, sendBuffer);
@@ -249,6 +252,8 @@ namespace ZG
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
         {
+            sendBuffer.RemoveChannel(0);
+            
             /*var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
             identity.Leave(

@@ -225,7 +225,7 @@ namespace ZG
         public void Connect(NetworkServerSendBufferWrapper sendBuffer)
         {
             //空的时候才能Or
-            //sendBuffer.AddChannel(0);
+            sendBuffer.AddChannel(0);
             
             var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
@@ -349,7 +349,7 @@ namespace ZG
                 default:
                     int relayType = reader.ReadPackedInt(streamCompressionModel);
                     
-                    UnityEngine.Debug.LogError($"Relay {type} :{(NetworkRelayType)relayType} : {identityIndex}");
+                    //UnityEngine.Debug.LogError($"Relay {type} :{(NetworkRelayType)relayType} : {identityIndex}");
                     switch ((NetworkRelayType)relayType)
                     {
                         case NetworkRelayType.All:

@@ -214,7 +214,7 @@ namespace ZG
             private NativeList<byte> __buffer;
             private NativeParallelMultiHashMap<NetworkPipeline, Message>.KeyValueEnumerator __enumerator;
 
-            public MessageElement Current => new MessageElement(__enumerator.Current.Value, __buffer);
+            public MessageElement Current => new MessageElement(__enumerator.Current.Value, __buffer.AsArray());
 
             public MessageEnumerator(in Messages messages)
             {
@@ -375,7 +375,7 @@ namespace ZG
             }
         }
         
-        public NativeArray<byte> buffer => __buffer.AsDeferredJobArray();
+        public NativeList<byte> buffer => __buffer;
 
         public NetworkClient(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {

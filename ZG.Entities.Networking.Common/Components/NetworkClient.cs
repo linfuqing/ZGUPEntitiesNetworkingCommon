@@ -423,7 +423,19 @@ namespace ZG
             if(headersSize > 0)
                 NativeArray<byte>.Copy(payload, 0, headersArray, headerSize, headersSize);
         }
+        
+        public bool Connect(in FixedString128Bytes address, ushort port, in NativeArray<byte> headers)
+        {
+            if (NetworkEndpoint.TryParse(address, port, out var endpoint))
+            {
+                Connect(endpoint, headers);
 
+                return true;
+            }
+
+            return false;
+        }
+        
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
         {
             return __driver.CreatePipeline(stages);
@@ -546,30 +558,6 @@ namespace ZG
             __sendBuffer.Dispose();
         }
         
-        public bool Connect(string address, ushort port, in NativeArray<byte> headers)
-        {
-            if (NetworkEndpoint.TryParse(address, port, out var endpoint))
-            {
-                __instance.Connect(endpoint, headers);
-
-                return true;
-            }
-
-            return false;
-        }
-
-        public bool Connect<T>(string address, ushort port, in T header) where T : unmanaged
-        {
-            var headers = new NativeArray<T>(1, Allocator.Temp);
-            headers[0] = header;
-
-            var result = Connect(address, port, headers.Reinterpret<byte>(UnsafeUtility.SizeOf<T>()));
-
-            headers.Dispose();
-            
-            return result;
-        }
-
         public int CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
         {
             var pipeline = __instance.CreatePipeline(stages);

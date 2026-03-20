@@ -16,15 +16,22 @@ namespace ZG
 {
     public struct NetworkRelayServerIdentity
     {
-        [Flags]
-        public enum ChannelFlag
-        {
-            Creator = 0x01
-        }
-        
         public readonly uint ID;
 
         //private UnsafeList<byte> __bytes;
+
+        public bool isOnline
+        {
+            get => channelFlag.HasFlag(NetworkRelayChannelFlag.Online);
+
+            set
+            {
+                if (value)
+                    channelFlag |= NetworkRelayChannelFlag.Online;
+                else
+                    channelFlag &= ~NetworkRelayChannelFlag.Online;
+            }
+        }
 
         public int channel
         {
@@ -33,7 +40,7 @@ namespace ZG
             private set;
         }
 
-        public ChannelFlag channelFlag
+        public NetworkRelayChannelFlag channelFlag
         {
             get;
 
@@ -120,7 +127,7 @@ namespace ZG
                 pipelineIndexToOthers, 
                 channel, 
                 sendBuffer))
-                channelFlag |= ChannelFlag.Creator;
+                channelFlag |= NetworkRelayChannelFlag.Creator;
         }
         
         public void Join(
@@ -187,7 +194,11 @@ namespace ZG
             writer.WritePackedInt(channel, streamCompressionModel);
 
             if (isSendOthers)
+            {
+                writer.WritePackedInt((int)channelFlag, streamCompressionModel);
+                
                 writer.WriteBytes(payload);
+            }
         }
         
         private bool __CreateOrJoin(
@@ -320,11 +331,23 @@ namespace ZG
             
             var identityIndex = identityIndices[sendBuffer.ID];
             var identity = identities[identityIndex];
+            identity.isOnline = true;
+            identities[identityIndex] = identity;
+            
             if (identity.channel != 0)
             {
+                if (sendBuffer.BeginWrite(pipelineIndexSendOthersFromChannel, out var writer))
+                {
+                    var streamCompressionModel = StreamCompressionModel.Default;
+                    writer.WritePackedInt((int)NetworkRelayMessageType.Connect, streamCompressionModel);
+                    writer.WritePackedUInt(sendBuffer.ID, streamCompressionModel);
+                        
+                    sendBuffer.EndWrite(writer);
+                }
+                
                 identity.SendHeader(false, pipelineIndexSendSelf,
-                    (identity.channelFlag & NetworkRelayServerIdentity.ChannelFlag.Creator) ==
-                    NetworkRelayServerIdentity.ChannelFlag.Creator
+                    (identity.channelFlag & NetworkRelayChannelFlag.Creator) ==
+                    NetworkRelayChannelFlag.Creator
                         ? (int)NetworkRelayMessageType.Create
                         : (int)NetworkRelayMessageType.Join,
                     sendBuffer);
@@ -347,6 +370,23 @@ namespace ZG
 
         public void Disconnect(NetworkServerSendBufferWrapper sendBuffer)
         {
+            var identityIndex = identityIndices[sendBuffer.ID];
+            var identity = identities[identityIndex];
+            if (identity.channel != 0)
+            {
+                if (sendBuffer.BeginWrite(pipelineIndexSendOthersFromChannel, out var writer))
+                {
+                    var streamCompressionModel = StreamCompressionModel.Default;
+                    writer.WritePackedInt((int)NetworkRelayMessageType.Disconnect, streamCompressionModel);
+                    writer.WritePackedUInt(sendBuffer.ID, streamCompressionModel);
+
+                    sendBuffer.EndWrite(writer);
+                }
+            }
+
+            identity.isOnline = false;
+            identities[identityIndex] = identity;
+            
             sendBuffer.RemoveChannel(0);
             
             /*var identityIndex = identityIndices[sendBuffer.ID];

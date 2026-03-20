@@ -6,6 +6,8 @@ namespace ZG
 {
     public enum NetworkRelayMessageType
     {
+        Connect, 
+        Disconnect,
         Init,
         Create,
         Join,
@@ -19,6 +21,13 @@ namespace ZG
         All,
         Channel,
         Identity
+    }
+
+    [Flags]
+    public enum NetworkRelayChannelFlag
+    {
+        Online = 0x01, 
+        Creator = 0x02
     }
 
     public enum NetworkPipelineStage

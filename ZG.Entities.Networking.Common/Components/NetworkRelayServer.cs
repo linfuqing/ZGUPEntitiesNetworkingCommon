@@ -7,6 +7,7 @@ using Unity.Collections.LowLevel.Unsafe;
 using Unity.Networking.Transport;
 using Unity.Networking.Transport.Error;
 using ZG;
+using Unity.Burst;
 
 [assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener>))]
 [assembly:RegisterGenericJobType(typeof(NetworkServerPopEventsJob<NetworkRelayServerHandler>))]
@@ -229,6 +230,7 @@ namespace ZG
     public struct NetworkRelayServerListener : INetworkServerListener
     {
         public NativeList<NetworkRelayServerIdentity> identities;
+        public NativeParallelHashMap<uint, int> idChannels;
 
         public void Connect(in NetworkConnection connection, uint id, int connectionIndex, int channelIndex, NativeArray<byte> payload)
         {
@@ -239,6 +241,8 @@ namespace ZG
                 UnityEngine.Assertions.Assert.AreEqual(channelIndex, identities.Length);
 
                 identities.Add(new NetworkRelayServerIdentity(id, Allocator.Persistent));
+
+                idChannels.Capacity = Unity.Mathematics.math.max(idChannels.Capacity, identities.Length);
             }
         }
 
@@ -252,7 +256,8 @@ namespace ZG
     {
         [NativeDisableParallelForRestriction] 
         public NativeArray<NetworkRelayServerIdentity> identities;
-        
+        public NativeParallelHashMap<uint, int>.ParallelWriter idChannels;
+
         public void Connect(ref NetworkServerSendBuffer.Identity sendBuffer)
         {
             var identityIndex = sendBuffer.channelIndex;
@@ -349,6 +354,9 @@ namespace ZG
                     break;
                 case NetworkRelayMessageType.Drop:
                     var id = reader.ReadPackedUInt(streamCompressionModel);
+                    identityIndex = sendBuffer.GetChannelIndex(id);
+                    if (identityIndex != -1)
+                        idChannels.TryAdd(id, identities[identityIndex].channel);
                     /*if (identities[identityIndices[id]].channel == identity.channel && 
                         sendBuffer.BeginWrite(pipelineIndexCustom, out writer))
                     {
@@ -403,12 +411,52 @@ namespace ZG
 
     public struct NetworkRelayServer : IComponentData
     {
+        [BurstCompile]
+        private struct Drop : IJobParallelFor
+        {
+            [ReadOnly, DeallocateOnJobCompletion]
+            public NativeArray<uint> ids;
+
+            [ReadOnly]
+            public NativeParallelHashMap<uint, int> idChannels;
+
+            public NetworkServerSendBuffer.Concurrent sendBuffer;
+
+            [NativeDisableParallelForRestriction]
+            public NativeArray<NetworkRelayServerIdentity> identities;
+
+            public void Execute(int index)
+            {
+                uint id = ids[index];
+                var sendBuffer = new NetworkServerSendBuffer.Identity(id, ref this.sendBuffer);
+
+                var identity = identities[sendBuffer.channelIndex];
+                if (identity.channel != idChannels[id])
+                    return;
+
+                identity.Drop(ref sendBuffer);
+            }
+        }
+
+        [BurstCompile]
+        private struct Clear : IJob
+        {
+            public NativeParallelHashMap<uint, int> idChannels;
+
+            public void Execute()
+            {
+                idChannels.Clear();
+            }
+        }
+
         public readonly NetworkPipeline Pipeline;
 
         private NetworkServer __instance;
         private NetworkServerSendBuffer __sendBuffer;
 
         private NativeList<NetworkRelayServerIdentity> __identities;
+
+        private NativeParallelHashMap<uint, int> __idChannels;
 
         public NetworkRelayServer(
             in NetworkSettings settings,
@@ -420,6 +468,8 @@ namespace ZG
             __sendBuffer = new NetworkServerSendBuffer(allocator);
 
             __identities = new NativeList<NetworkRelayServerIdentity>(allocator);
+
+            __idChannels = new NativeParallelHashMap<uint, int>(1, allocator);
 
             Pipeline = __instance.CreatePipeline(stages);
         }
@@ -461,6 +511,7 @@ namespace ZG
             __instance.Dispose();
             __sendBuffer.Dispose();
             __identities.Dispose();
+            __idChannels.Dispose();
         }
 
         public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
@@ -477,15 +528,28 @@ namespace ZG
             int innerloopBatchCount,
             in JobHandle inputDeps)
         {
+            Drop drop;
+            drop.ids = __idChannels.GetKeyArray(Allocator.TempJob);
+            drop.idChannels = __idChannels;
+            drop.sendBuffer = __sendBuffer.AsConcurrent();
+            drop.identities = __identities.AsArray();
+            var jobHandle = drop.ScheduleByRef(drop.ids.Length, innerloopBatchCount, inputDeps);
+
+            Clear clear;
+            clear.idChannels = __idChannels;
+            jobHandle = clear.ScheduleByRef(jobHandle);
+
             NetworkRelayServerListener listener;
             listener.identities = __identities;
+            listener.idChannels = __idChannels;
 
             NetworkRelayServerHandler handler;
             handler.identities = __identities.AsDeferredJobArray();
+            handler.idChannels = __idChannels.AsParallelWriter();
 
             return __instance.Schedule(ref listener, ref handler, ref __sendBuffer, 
                 innerloopBatchCount, Pipeline, 
-                in inputDeps);
+                in jobHandle);
         }
     }
 }

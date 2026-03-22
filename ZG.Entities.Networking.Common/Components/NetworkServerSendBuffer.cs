@@ -261,12 +261,14 @@ public struct NetworkServerSendBuffer
 
         public int channelIndex => __sendBuffer.GetChannelIndex(ID);
 
-        internal Identity(uint id,
+        public Identity(uint id,
             ref Concurrent sendBuffer)
         {
             ID = id;
             __sendBuffer = sendBuffer;
         }
+
+        public int GetChannelIndex(uint id) => __sendBuffer.GetChannelIndex(id);
 
         public NativeArray<byte> GetPayload(uint id)
         {
@@ -487,12 +489,22 @@ public struct NetworkServerSendBuffer
 
     public Sender AsSender() => new Sender(ref this);
 
-    public void GetConnection(uint id, out int connectionIndex, out int channelIndex, out NativeArray<byte> payload)
+    public bool GetConnection(uint id, out int connectionIndex, out int channelIndex, out NativeArray<byte> payload)
     {
-        var temp = __connectionIndices[id];
+        if (!__connectionIndices.TryGetValue(id, out var temp))
+        {
+            connectionIndex = -1;
+            channelIndex = -1;
+            payload = default;
+
+            return false;
+        }
+
         connectionIndex = temp.value;
         channelIndex = temp.channelIndex;
         payload = __payloads.AsArray().GetSubArray(temp.payloadOffset, temp.payloadSize);
+
+        return true;
     }
 
     public uint Connect(ref NetworkConnection connection, in NativeArray<byte> payload)

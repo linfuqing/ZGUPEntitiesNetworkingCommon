@@ -1,3 +1,4 @@
+using System;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Networking.Transport;
@@ -7,16 +8,11 @@ namespace ZG
 {
     public struct NetworkSendBuffer
     {
-        private int __index;
         private UnsafeList<int> __sizes;
         private UnsafeList<byte> __bytes;
         
-        public bool isEmpty => __index >= __sizes.Length;
-
         public NetworkSendBuffer(in AllocatorManager.AllocatorHandle allocator)
         {
-            __index = 0;
-
             __sizes = new UnsafeList<int>(1, allocator);
             __bytes = new UnsafeList<byte>(1, allocator);
         }
@@ -29,29 +25,27 @@ namespace ZG
 
         public void Clear()
         {
-            __index = 0;
             __sizes.Clear();
             __bytes.Clear();
         }
 
-        public void Append(in NetworkSendBuffer buffer)
+        public void Append(in NetworkSendBuffer buffer, int index)
         {
             int length = buffer.__sizes.Length;
-            if (length > buffer.__index)
+            if (length > index)
             {
                 int sizeLength = __sizes.Length;
-                __sizes.Resize(sizeLength + length - buffer.__index, NativeArrayOptions.UninitializedMemory);
+                __sizes.Resize(sizeLength + length - index, NativeArrayOptions.UninitializedMemory);
                 
-                int index = buffer.__sizes[buffer.__index],
-                    offset = __bytes.Length - index, 
-                    sizeOffset = sizeLength - buffer.__index;
-                for (int i = buffer.__index; i < length; ++i)
+                int size = buffer.__sizes[index],
+                    offset = __bytes.Length - size, 
+                    sizeOffset = sizeLength - index;
+                for (int i = index; i < length; ++i)
                     __sizes[sizeOffset + i] = buffer.__sizes[i] + offset;
 
-                int size = buffer.__bytes.Length - index;
                 unsafe
                 {
-                    __bytes.AddRange(buffer.__bytes.Ptr + index, size);
+                    __bytes.AddRange(buffer.__bytes.Ptr + size, buffer.__bytes.Length - size);
                 }
             }
         }
@@ -59,12 +53,13 @@ namespace ZG
         public bool Apply(
             in NetworkConnection connection,
             in NetworkPipeline pipeline,
-            ref NetworkDriver.Concurrent driver)
+            ref NetworkDriver.Concurrent driver, 
+            ref int index)
         {
             int length = __sizes.Length, count, byteOffset, result;
             StatusCode statusCode;
             DataStreamWriter writer = default;
-            while (__index < length)
+            while (index < length)
             {
                 if (!writer.IsCreated)
                 {
@@ -77,12 +72,12 @@ namespace ZG
                     }
                 }
 
-                byteOffset = __index > 0 ? __sizes[__index - 1] : 0;
+                byteOffset = index > 0 ? __sizes[index - 1] : 0;
                 count = __BinarySearch(
                     __sizes, 
                     writer.Capacity - writer.Length + byteOffset, 
-                    __index);
-                if (count < __index)
+                    index);
+                if (count < index)
                 {
                     result = driver.EndSend(writer);
                     if (result < 0)
@@ -99,36 +94,37 @@ namespace ZG
 
                 writer.WriteBytes(__AsArray(byteOffset, count));
 
-                __index = count + 1;
+                index = count + 1;
             }
             
             if(writer.IsCreated)
                 driver.EndSend(writer);
 
             Clear();
+            index = 0;
 
             return true;
         }
 
-        public bool ReadNext(out NativeArray<byte> bytes)
+        public bool ReadNext(ref int index, out NativeArray<byte> bytes)
         {
-            if (__index >= __sizes.Length)
+            if (index >= __sizes.Length)
             {
                 bytes = default;
                 
                 return false;
             }
 
-            int byteOffset = __index > 0 ? __sizes[__index - 1] : 0;
+            int byteOffset = index > 0 ? __sizes[index - 1] : 0;
 
-            bytes = __AsArray(byteOffset + UnsafeUtility.SizeOf<ushort>(), __index);
+            bytes = __AsArray(byteOffset + UnsafeUtility.SizeOf<ushort>(), index);
 
-            ++__index;
+            ++index;
 
             return true;
         }
 
-        public bool BeginWrite(out DataStreamWriter writer, short capacity = 1024)
+        public bool BeginWrite(out DataStreamWriter writer, ushort capacity = 1024)
         {
             if (capacity < 1)
             {

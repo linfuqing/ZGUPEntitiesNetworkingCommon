@@ -21,10 +21,22 @@ namespace ZG
 
     public struct NetworkClientSendBuffer : IComponentData
     {
+        private struct Buffer
+        {
+            public int index;
+            public NetworkSendBuffer value;
+
+            public void Clear()
+            {
+                index = 0;
+                value.Clear();
+            }
+        }
+
         public struct ParallelWriter
         {
             [NativeDisableParallelForRestriction]
-            private NativeArray<NetworkSendBuffer> __buffers;
+            private NativeArray<Buffer> __buffers;
 
             [NativeSetThreadIndex]
             internal int _threadIndex;
@@ -36,12 +48,12 @@ namespace ZG
                 _threadIndex = 0;
             }
             
-            public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
+            public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
             {
                 int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount + _threadIndex;
                 var buffer = __buffers[bufferIndex];
                 
-                bool result = buffer.BeginWrite(out writer, capacity);
+                bool result = buffer.value.BeginWrite(out writer, capacity);
 
                 writer.m_SendHandleData = (IntPtr)bufferIndex;
 
@@ -54,7 +66,7 @@ namespace ZG
             {
                 int bufferIndex = (int)writer.m_SendHandleData;
                 var buffer = __buffers[bufferIndex];
-                buffer.EndWrite(writer);
+                buffer.value.EndWrite(writer);
                 __buffers[bufferIndex] = buffer;
             }
 
@@ -62,7 +74,7 @@ namespace ZG
         
         [ReadOnly]
         private NativeList<NetworkPipeline> __pipelines;
-        private NativeList<NetworkSendBuffer> __buffers;
+        private NativeList<Buffer> __buffers;
         
         public bool isCreated => __buffers.IsCreated;
         
@@ -72,7 +84,7 @@ namespace ZG
         {
             __pipelines = new NativeList<NetworkPipeline>(allocator);
 
-            __buffers = new NativeList<NetworkSendBuffer>(allocator);
+            __buffers = new NativeList<Buffer>(allocator);
         }
 
         public void Dispose()
@@ -80,14 +92,14 @@ namespace ZG
             __pipelines.Dispose();
 
             foreach (var buffer in __buffers)
-                buffer.Dispose();
+                buffer.value.Dispose();
             
             __buffers.Dispose();
         }
 
         public void Clear()
         {
-            NetworkSendBuffer buffer;
+            Buffer buffer;
             int length = math.min(__pipelines.Length, __buffers.Length);
             for (int i = 0; i < length; ++i)
             {
@@ -113,18 +125,22 @@ namespace ZG
             int result = __pipelines.Length;
             
             __pipelines.Add(pipeline);
-            
-            for(int i = 0; i < JobsUtility.MaxJobThreadCount; ++i)
-                __buffers.Add(new NetworkSendBuffer(allocator));
 
+            Buffer buffer;
+            buffer.index = 0;
+            for (int i = 0; i < JobsUtility.MaxJobThreadCount; ++i)
+            {
+                buffer.value = new NetworkSendBuffer(allocator);
+                __buffers.Add(buffer);
+            }
             return result;
         }
 
-        public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, short capacity = 1024)
+        public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
         {
             int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount;
             
-            bool result = __buffers.ElementAt(bufferIndex).BeginWrite(out writer, capacity);
+            bool result = __buffers.ElementAt(bufferIndex).value.BeginWrite(out writer, capacity);
 
             writer.m_SendHandleData = (IntPtr)bufferIndex;
 
@@ -133,14 +149,17 @@ namespace ZG
 
         public void EndWrite(in DataStreamWriter writer)
         {
-            __buffers.ElementAt((int)writer.m_SendHandleData).EndWrite(writer);
+            __buffers.ElementAt((int)writer.m_SendHandleData).value.EndWrite(writer);
         }
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
         {
             int length = __buffers.Length;
             for (int i = 0; i < length; ++i)
-                __buffers.ElementAt(i).Apply(connection, __pipelines[i / JobsUtility.MaxJobThreadCount], ref driver);
+            {
+                ref var buffer = ref __buffers.ElementAt(i);
+                buffer.value.Apply(connection, __pipelines[i / JobsUtility.MaxJobThreadCount], ref driver, ref buffer.index);
+            }
         }
     }
     

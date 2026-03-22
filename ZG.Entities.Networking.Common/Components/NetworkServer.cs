@@ -21,73 +21,19 @@ namespace ZG
 
     public interface INetworkServerListener
     {
-        void Connect(in NetworkConnection connection, uint id);
+        void Connect(in NetworkConnection connection, uint id, int connectionIndex, int channelIndex, NativeArray<byte> payload);
 
         void Disconnect(in NetworkConnection connection, uint id);
     }
     
     public interface INetworkServerHandler
     {
-        void Connect(NetworkServerSendBufferWrapper sendBuffer);
+        void Connect(ref NetworkServerSendBuffer.Identity sendBuffer);
 
-        void Disconnect(NetworkServerSendBufferWrapper sendBuffer);
+        void Disconnect(ref NetworkServerSendBuffer.Identity sendBuffer);
 
         void Read(ref DataStreamReader reader,
-            NetworkServerSendBufferWrapper sendBuffer);
-    }
-
-    public interface INetworkServerBufferHandler
-    {
-        bool Apply(
-            int pipelineIndex, 
-            DataStreamReader reader,
-            in NetworkConnection source, 
-            in NetworkConnection destination, 
-            ref NetworkDriver.Concurrent driver, 
-            ref NetworkServerSendBuffer.Concurrent sendBuffer);
-    }
-
-    public struct NetworkServerSendBufferWrapper
-    {
-        public uint ID;
-        
-        private NetworkServerSendBuffer.Concurrent __sendBuffer;
-
-        //public NativeArray<byte> payload => __sendBuffer.GetPayload(ID);
-
-        internal NetworkServerSendBufferWrapper(in NetworkConnection connection,
-            ref NetworkServerSendBuffer.Concurrent sendBuffer)
-        {
-            ID = sendBuffer[connection];
-            __sendBuffer = sendBuffer;
-        }
-
-        public NativeArray<byte> GetPayload(uint id)
-        {
-            return __sendBuffer.GetPayload(id);
-        }
-
-        public bool AddChannel(int value)
-        {
-            return __sendBuffer.AddChannel(ID, value);
-        }
-        
-        public bool RemoveChannel(int value)
-        {
-            return __sendBuffer.RemoveChannel(ID, value);
-        }
-
-        public bool BeginWrite(
-            int pipelineIndex,
-            out DataStreamWriter writer, short capacity = 1024)
-        {
-            return __sendBuffer.BeginWrite(pipelineIndex, ID, out writer, capacity);
-        }
-
-        public void EndWrite(in DataStreamWriter writer)
-        {
-            __sendBuffer.EndWrite(writer);
-        }
+            ref NetworkServerSendBuffer.Identity sendBuffer);
     }
 
     [BurstCompile]
@@ -98,12 +44,13 @@ namespace ZG
 
         public NetworkServerSendBuffer sendBuffer;
 
-        public NativeList<NetworkConnection> connections;
         public NativeList<NetworkConnection> connectionsToConnect;
         public NativeList<NetworkConnection> connectionsToDisconnect;
 
         public void Execute()
         {
+            sendBuffer.Clear();
+
             foreach (var connectionToDisconnect in connectionsToDisconnect)
                 __Disconnect(connectionToDisconnect);
                 
@@ -111,6 +58,7 @@ namespace ZG
                 
             connectionsToConnect.Clear();
 
+            int connectionIndex, channelIndex;
             uint id;
             NetworkConnection connection, temp;
             while ((connection = driver.Accept(out var payload)) != default)
@@ -143,21 +91,17 @@ namespace ZG
                 }
 
                 connectionsToConnect.Add(connection);
-                
-                connections.Add(connection);
-                
-                listener.Connect(connection, id);
+
+                sendBuffer.GetConnection(id, out connectionIndex, out channelIndex, out _);
+
+                listener.Connect(connection, id, connectionIndex, channelIndex, payload);
             }
 
-            connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, connections.Length);
+            connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, sendBuffer.connections.Length);
         }
         
         private void __Disconnect(in NetworkConnection connection)
         {
-            int connectionIndex = connections.IndexOf(connection);
-            if(connectionIndex != -1)
-                connections.RemoveAtSwapBack(connectionIndex);
-                    
             uint id = sendBuffer.Disconnect(connection);
                 
             listener.Disconnect(connection, id);
@@ -179,14 +123,17 @@ namespace ZG
         [ReadOnly]
         public NativeArray<NetworkConnection> connections;
 
+        [ReadOnly]
+        public NativeHashMap<NetworkConnection, uint> connectionIDs;
+
         public void Execute(int index)
         {
             var connection = connections[index];
             
-            var sendBuffer = new NetworkServerSendBufferWrapper(connection, ref this.sendBuffer);
+            var sendBuffer = new NetworkServerSendBuffer.Identity(connectionIDs[connection], ref this.sendBuffer);
 
             if(connectionsToConnect.IndexOf(connection) != -1)
-                handler.Connect(sendBuffer);
+                handler.Connect(ref sendBuffer);
             
             bool isEmpty = false;
             NetworkEvent.Type cmd;
@@ -219,13 +166,13 @@ namespace ZG
 
                                 var stream = new DataStreamReader(bytes);
                                 
-                                handler.Read(ref stream, sendBuffer);
+                                handler.Read(ref stream, ref sendBuffer);
                             }
                         } while (reader.GetBytesRead() < reader.Length);
 
                         break;
                     case NetworkEvent.Type.Connect:
-                        handler.Connect(sendBuffer);
+                        handler.Connect(ref sendBuffer);
                         
                         break;
                     case NetworkEvent.Type.Disconnect:
@@ -233,7 +180,7 @@ namespace ZG
                         var disconnectReason = (DisconnectReason)reader.ReadByte();
                         __LogDisconnectReason(connection, disconnectReason);
 
-                        handler.Disconnect(sendBuffer);
+                        handler.Disconnect(ref sendBuffer);
 
                         connectionsToDisconnect.AddNoResize(connection);
                         break;
@@ -247,592 +194,27 @@ namespace ZG
         }
     }
 
-    [BurstCompile]
-    public struct NetworkServerSendJob<T> : IJobParallelForDefer where T : unmanaged, INetworkServerBufferHandler
-    {
-        public T bufferHandler;
-        
-        [ReadOnly]
-        public NativeArray<NetworkConnection> connections;
-
-        public NetworkDriver.Concurrent driver;
-            
-        public NetworkServerSendBuffer.Concurrent sendBuffer;
-
-        public void Execute(int index)
-        {
-            sendBuffer.Apply(connections[index], ref driver, ref bufferHandler);
-        }
-    }
-
-    public struct NetworkServerSendBuffer : IComponentData
-    {
-        private struct Pipeline
-        {
-            public NetworkServerPipelineType type;
-            
-            public NetworkPipeline value;
-        }
-
-        private struct Channel
-        {
-            private UnsafeList<int> __values;
-
-            public Channel(in AllocatorManager.AllocatorHandle allocator)
-            {
-                __values = new UnsafeList<int>(1, allocator);
-            }
-            
-            public void Dispose()
-            {
-                __values.Dispose();
-            }
-
-            public void Clear()
-            {
-                __values.Clear();
-            }
-
-            public bool Or(in Channel channel)
-            {
-                bool result = __values.IsEmpty || channel.__values.IsEmpty;
-                if (!result)
-                {
-                    foreach (var value in __values)
-                    {
-                        if (channel.__values.Contains(value))
-                        {
-                            result = true;
-
-                            break;
-                        }
-                    }
-                }
-
-                return result;
-            }
-
-            public bool And(in Channel channel)
-            {
-                bool result = false;
-                if (!__values.IsEmpty && !channel.__values.IsEmpty)
-                {
-                    result = true;
-                    foreach (var value in __values)
-                    {
-                        if (!channel.__values.Contains(value))
-                        {
-                            result = false;
-
-                            break;
-                        }
-                    }
-                }
-
-                return result;
-            }
-
-            public bool Add(int value)
-            {
-                if (__values.Contains(value))
-                    return false;
-                
-                __values.Add(value);
-
-                return true;
-            }
-
-            public bool Remove(int value)
-            {
-                int index = __values.IndexOf(value);
-                if (index == -1)
-                    return false;
-                
-                __values.RemoveAtSwapBack(index);
-
-                return true;
-            }
-        }
-        
-        private struct Index
-        {
-            private struct Comparer : System.Collections.Generic.IComparer<PipelineBuffer>
-            {
-                public NativeList<Pipeline> pipelines;
-                
-                public int Compare(PipelineBuffer x, PipelineBuffer y)
-                {
-                    return ((int)pipelines[x.pipeline].type).CompareTo((int)pipelines[y.pipeline].type);
-                }
-            }
-
-            public struct PipelineBuffer
-            {
-                public int pipeline;
-                public int buffer;
-            }
-
-            public int payloadOffset;
-            public int payloadSize;
-            public int channel;
-            public FixedList64Bytes<PipelineBuffer> pipelineBuffers;
-
-            public void Sort(in NativeList<Pipeline> pipelines)
-            {
-                using (var array = pipelineBuffers.ToNativeArray(Allocator.Temp))
-                {
-                    Comparer comparer;
-                    comparer.pipelines = pipelines;
-
-                    array.Sort(comparer);
-                    
-                    pipelineBuffers.Clear();
-                    unsafe
-                    {
-                        pipelineBuffers.AddRange(array.GetUnsafeReadOnlyPtr(), array.Length);
-                    }
-                }
-            }
-        }
-
-        public struct Concurrent
-        {
-            [ReadOnly]
-            private NativeHashMap<NetworkConnection, uint> __ids;
-
-            [ReadOnly]
-            private NativeHashMap<uint, Index> __indices;
-
-            [ReadOnly]
-            private NativeList<Pipeline> __pipelines;
-
-            [NativeDisableParallelForRestriction]
-            private NativeArray<NetworkSendBuffer> __buffers;
-
-            [NativeDisableParallelForRestriction]
-            private NativeArray<Channel> __channels;
-            
-            [NativeDisableParallelForRestriction]
-            private NativeArray<byte> __payload;
-
-            public uint this[NetworkConnection connection] => __ids[connection];
-
-            public Concurrent(ref NetworkServerSendBuffer buffer)
-            {
-                __ids = buffer.__ids;
-                __indices = buffer.__indices;
-                __pipelines = buffer.__pipelines;
-                __buffers = buffer.__buffers.AsDeferredJobArray();
-                __channels = buffer.__channels.AsDeferredJobArray();
-                __payload = buffer.__payloads.AsDeferredJobArray();
-            }
-
-            public NativeArray<byte> GetPayload(uint id)
-            {
-                var index = __indices[id];
-                
-                return __payload.GetSubArray(index.payloadOffset, index.payloadSize);
-            }
-
-            public bool AddChannel(uint id, int value)
-            {
-                int channelIndex = __indices[id].channel;
-                Channel channel = __channels[channelIndex];
-
-                if (channel.Add(value))
-                {
-                    __channels[channelIndex] = channel;
-
-                    return true;
-                }
-                
-                return false;
-            }
-
-            public bool RemoveChannel(uint id, int value)
-            {
-                int channelIndex = __indices[id].channel;
-                Channel channel = __channels[channelIndex];
-
-                if (channel.Remove(value))
-                {
-                    __channels[channelIndex] = channel;
-
-                    return true;
-                }
-
-                return false;
-            }
-
-            public bool BeginWrite(
-                int pipelineIndex,
-                uint id, 
-                out DataStreamWriter writer, short capacity = 1024)
-            {
-                foreach (var pipelineBuffers in __indices[id].pipelineBuffers)
-                {
-                    if (pipelineBuffers.pipeline == pipelineIndex)
-                    {
-                        var buffer = __buffers[pipelineBuffers.buffer];
-                        bool result = buffer.BeginWrite(out writer, capacity);
-                        __buffers[pipelineBuffers.buffer] = buffer;
-
-                        writer.m_SendHandleData = (IntPtr)pipelineBuffers.buffer;
-
-                        return result;
-                    }
-                }
-
-                writer = default;
-
-                return false;
-            }
-
-            public void EndWrite(in DataStreamWriter writer)
-            {
-                int index = (int)writer.m_SendHandleData;
-                var buffer = __buffers[index];
-                buffer.EndWrite(writer);
-                __buffers[index] = buffer;
-            }
-
-            public void Apply<T>(
-                in NetworkConnection connection, 
-                ref NetworkDriver.Concurrent driver, 
-                ref T handler) where T : INetworkServerBufferHandler
-            {
-                /*Pipeline pipeline;
-                NetworkSendBuffer buffer;
-                foreach (var index in __indices.GetValuesForKey(connection))
-                {
-                    pipeline = __pipelines[index.pipeline];
-                    switch (pipeline.type)
-                    {
-                        case NetworkServerPipelineType.SendSelfFromOthers:
-                            buffer = __buffers[index.buffer];
-                            buffer.Apply(connection, pipeline.value, ref driver);
-                            __buffers[index.buffer] = buffer;
-                            break;
-                    }
-                }*/
-
-                var id = __ids[connection];
-                Index index = __indices[id], tempIndex;
-                Channel channel = __channels[__indices[id].channel], tempChannel;
-                Pipeline pipeline, tempPipeline;
-                NetworkSendBuffer buffer, tempBuffer;
-                NetworkConnection tempConnection;
-                foreach (var tempID in __ids)
-                {
-                    tempIndex = __indices[tempID.Value];
-                    tempChannel = __channels[tempIndex.channel];
-                    if (!tempChannel.Or(channel))
-                        continue;
-
-                    tempConnection = tempID.Key;
-
-                    foreach (var tempPipelineBuffer in tempIndex.pipelineBuffers)
-                    {
-                        tempPipeline = __pipelines[tempPipelineBuffer.pipeline];
-
-                        switch (tempPipeline.type)
-                        {
-                            case NetworkServerPipelineType.Custom:
-                                buffer = __buffers[tempPipelineBuffer.buffer];
-                                while (buffer.ReadNext(out var bytes))
-                                {
-                                    if (!handler.Apply(
-                                            tempPipelineBuffer.pipeline,
-                                            new DataStreamReader(bytes),
-                                            tempConnection,
-                                            connection,
-                                            ref driver,
-                                            ref this))
-                                    {
-                                        foreach (var pipelineBuffer in index.pipelineBuffers)
-                                        {
-                                            pipeline = __pipelines[pipelineBuffer.pipeline];
-                                            if (NetworkServerPipelineType.SendSelfFromOthers == pipeline.type &&
-                                                pipeline.value == tempPipeline.value)
-                                            {
-                                                tempBuffer = __buffers[pipelineBuffer.buffer];
-                                                if (tempBuffer.BeginWrite(out var writer))
-                                                {
-                                                    writer.WriteBytes(bytes);
-
-                                                    tempBuffer.EndWrite(writer);
-
-                                                    __buffers[pipelineBuffer.buffer] = tempBuffer;
-                                                }
-
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                break;
-                            case NetworkServerPipelineType.SendOthers:
-                            case NetworkServerPipelineType.SendOthersFromChannel:
-                                if (connection != tempConnection &&
-                                    (NetworkServerPipelineType.SendOthersFromChannel != tempPipeline.type ||
-                                     tempChannel.And(channel)))
-                                {
-                                    buffer = __buffers[tempPipelineBuffer.buffer];
-                                    
-                                    /*if(!buffer.isEmpty)
-                                        UnityEngine.Debug.LogError($"{tempConnection} Send To {connection}");*/
-                                    
-                                    if (!buffer.Apply(connection, tempPipeline.value, ref driver))
-                                    {
-                                        foreach (var pipelineBuffer in index.pipelineBuffers)
-                                        {
-                                            pipeline = __pipelines[pipelineBuffer.pipeline];
-                                            if (NetworkServerPipelineType.SendSelfFromOthers == pipeline.type &&
-                                                pipeline.value == tempPipeline.value)
-                                            {
-                                                tempBuffer = __buffers[pipelineBuffer.buffer];
-                                                tempBuffer.Append(buffer);
-
-                                                __buffers[pipelineBuffer.buffer] = tempBuffer;
-
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                break;
-                            case NetworkServerPipelineType.SendSelf:
-                            case NetworkServerPipelineType.SendSelfFromOthers:
-                                if (connection == tempConnection)
-                                {
-                                    buffer = __buffers[tempPipelineBuffer.buffer];
-                                    buffer.Apply(connection, tempPipeline.value, ref driver);
-                                    __buffers[tempPipelineBuffer.buffer] = buffer;
-                                }
-
-                                break;
-                        }
-                    }
-                }
-            }
-
-            public void Clear(in NetworkConnection connection)
-            {
-                Pipeline pipeline;
-                NetworkSendBuffer buffer;
-                var id = __ids[connection];
-                foreach (var pipelineBuffer in __indices[id].pipelineBuffers)
-                {
-                    pipeline = __pipelines[pipelineBuffer.pipeline];
-                    switch (pipeline.type)
-                    {
-                        case NetworkServerPipelineType.SendOthers:
-                        case NetworkServerPipelineType.SendOthersFromChannel:
-                        case NetworkServerPipelineType.Custom:
-                            buffer = __buffers[pipelineBuffer.buffer];
-                            buffer.Clear();
-                            __buffers[pipelineBuffer.buffer] = buffer;
-                            break;
-                    }
-                }
-            }
-        }
-
-        private NativeList<byte> __payloads;
-        private NativeList<Channel> __channels;
-        private NativeList<Pipeline> __pipelines;
-        private NativeList<NetworkSendBuffer> __buffers;
-        private NativeHashMap<uint, Index> __indices;
-        private NativeHashMap<NetworkConnection, uint> __ids;
-        private NativeHashMap<uint, NetworkConnection> __connections;
-
-        public unsafe AllocatorManager.AllocatorHandle allocator => __pipelines.GetUnsafeList()->Allocator;
-
-        public NetworkServerSendBuffer(
-            in AllocatorManager.AllocatorHandle allocator)
-        {
-            __payloads = new NativeList<byte>(allocator);
-            
-            __channels = new NativeList<Channel>(allocator);
-            
-            __pipelines = new NativeList<Pipeline>(allocator);
-
-            __buffers = new NativeList<NetworkSendBuffer>(allocator);
-
-            __indices = new NativeHashMap<uint, Index>(1, allocator);
-
-            __ids = new NativeHashMap<NetworkConnection, uint>(1, allocator);
-
-            __connections = new NativeHashMap<uint, NetworkConnection>(1, allocator);
-        }
-
-        public void Dispose()
-        {
-            __payloads.Dispose();
-            
-            foreach (var channels in __channels)
-                channels.Dispose();
-
-            __channels.Dispose();
-
-            __pipelines.Dispose();
-
-            foreach (var buffer in __buffers)
-                buffer.Dispose();
-
-            __buffers.Dispose();
-
-            __indices.Dispose();
-
-            __ids.Dispose();
-
-            __connections.Dispose();
-        }
-
-        /*public void Clear()
-        {
-            int length = math.min(__pipelines.Length, __buffers.Length);
-            for (int i = 0; i < length; ++i)
-                __buffers.ElementAt(i).Clear();
-        }*/
-
-        public Concurrent AsConcurrent() => new Concurrent(ref this);
-
-        public int CreatePipeline(NetworkServerPipelineType type, in NetworkPipeline value)
-        {
-            int result = __pipelines.Length;
-            Pipeline pipeline;
-            for (int i = 0; i < result; ++i)
-            {
-                pipeline = __pipelines[i];
-                if (pipeline.type == type && pipeline.value == value)
-                    return i;
-            }
-
-            Index.PipelineBuffer pipelineBuffer;
-            pipelineBuffer.pipeline = __pipelines.Length;
-            
-            pipeline.type = type;
-            pipeline.value = value;
-            __pipelines.Add(pipeline);
-
-            using (var keys = __indices.GetKeyArray(Allocator.Temp))
-            {
-                Index index;
-                foreach (var key in keys)
-                {
-                    index = __indices[key];
-                    
-                    pipelineBuffer.buffer = __Alloc();
-                    index.pipelineBuffers.Add(pipelineBuffer);
-                    index.Sort(__pipelines);
-                    
-                    __indices[key] = index;
-                }
-            }
-
-            return result;
-        }
-
-        public uint Connect(ref NetworkConnection connection, in NativeArray<byte> payload)
-        {
-            uint id = new DataStreamReader(payload).ReadPackedUInt(StreamCompressionModel.Default);
-
-            if (__connections.TryGetValue(id, out var originConnection))
-            {
-                UnityEngine.Debug.LogError($"connection id mismatch: {id}");
-                
-                connection = originConnection;
-                
-                return 0;
-            }
-            
-            __connections.Add(id, connection);
-
-            __ids.Add(connection, id);
-
-            if (__indices.TryGetValue(id, out var index))
-            {
-                if (index.payloadSize != payload.Length)
-                {
-                    UnityEngine.Debug.LogError($"payload size mismatch: {index.payloadSize} != {payload.Length}");
-
-                    return 0;
-                }
-                
-                NativeArray<byte>.Copy(payload, 
-                    0, 
-                    __payloads.AsArray(), 
-                    index.payloadOffset, 
-                    index.payloadSize);
-                
-                return id;
-            }
-
-            index.payloadOffset = __payloads.Length;
-            index.payloadSize = payload.Length;
-            
-            __payloads.AddRange(payload);
-            
-            index.channel = __channels.Length;
-                
-            __channels.Add(new Channel(allocator));
-
-            Index.PipelineBuffer pipelineBuffer;
-            int numPipelines = __pipelines.Length;
-            for (int i = 0; i < numPipelines; ++i)
-            {
-                pipelineBuffer.pipeline = i;
-                pipelineBuffer.buffer = __Alloc();
-                
-                index.pipelineBuffers.Add(pipelineBuffer);
-            }
-            
-            index.Sort(__pipelines);
-            
-            __indices.Add(id, index);
-
-            return id;
-        }
-
-        public uint Disconnect(in NetworkConnection connection)
-        {
-            uint id = __ids[connection];
-            __connections.Remove(id);
-            __ids.Remove(connection);
-            return id;
-        }
-
-        private int __Alloc()
-        {
-            int result = __buffers.Length;
-
-            __buffers.Add(new NetworkSendBuffer(allocator));
-
-            return result;
-        }
-    }
-
     public struct NetworkServer
     {
         [BurstCompile]
-        private struct Clear : IJobParallelForDefer
+        private struct Send : IJobParallelForDefer
         {
+            public NetworkPipeline pipeline;
+
             [ReadOnly]
             public NativeArray<NetworkConnection> connections;
 
-            public NetworkServerSendBuffer.Concurrent sendBuffer;
+            public NetworkDriver.Concurrent driver;
+
+            public NetworkServerSendBuffer.Sender sender;
 
             public void Execute(int index)
             {
-                sendBuffer.Clear(connections[index]);
+                sender.Send(connections[index], pipeline, ref driver);
             }
         }
 
         private NetworkDriver __driver;
-        private NativeList<NetworkConnection> __connections;
         private NativeList<NetworkConnection> __connectionsToConnect;
         private NativeList<NetworkConnection> __connectionsToDisconnect;
 
@@ -840,7 +222,6 @@ namespace ZG
         {
             __driver = NetworkDriver.Create(settings);
 
-            __connections = new NativeList<NetworkConnection>(allocator);
             __connectionsToConnect = new NativeList<NetworkConnection>(allocator);
             __connectionsToDisconnect = new NativeList<NetworkConnection>(allocator);
         }
@@ -848,7 +229,6 @@ namespace ZG
         public void Dispose()
         {
             __driver.Dispose();
-            __connections.Dispose();
             __connectionsToConnect.Dispose();
             __connectionsToDisconnect.Dispose();
         }
@@ -884,16 +264,15 @@ namespace ZG
             __driver.Disconnect(connection);
         }
 
-        public JobHandle Schedule<TListener, THandler, TBufferHandler>(
+        public JobHandle Schedule<TListener, THandler>(
             ref TListener listener, 
             ref THandler handler, 
-            ref TBufferHandler bufferHandler, 
             ref NetworkServerSendBuffer sendBuffer,
             int innerloopBatchCount, 
+            in NetworkPipeline pipeline, 
             in JobHandle inputDeps) 
             where TListener : unmanaged, INetworkServerListener
             where THandler : unmanaged, INetworkServerHandler
-            where TBufferHandler : unmanaged, INetworkServerBufferHandler
         {
             var driver = __driver.ToConcurrent();
             
@@ -905,12 +284,12 @@ namespace ZG
             init.listener = listener;
             init.driver = __driver;
             init.sendBuffer = sendBuffer;
-            init.connections = __connections;
             init.connectionsToConnect = __connectionsToConnect;
             init.connectionsToDisconnect = __connectionsToDisconnect;
             jobHandle = init.ScheduleByRef(jobHandle);
 
-            var connections = __connections.AsDeferredJobArray();
+            var connectionList = sendBuffer.connections;
+            var connections = connectionList.AsDeferredJobArray();
             
             NetworkServerPopEventsJob<THandler> popEvents;
             popEvents.handler = handler;
@@ -919,25 +298,19 @@ namespace ZG
             popEvents.connectionsToConnect = __connectionsToConnect.AsDeferredJobArray();
             popEvents.connectionsToDisconnect = __connectionsToDisconnect.AsParallelWriter();
             popEvents.connections = connections;
+            popEvents.connectionIDs = sendBuffer.connectionIDs;
 
-            jobHandle = popEvents.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
+            jobHandle = popEvents.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
             
-            NetworkServerSendJob<TBufferHandler> send;
-            send.bufferHandler = bufferHandler;
+            Send send;
+            send.pipeline = pipeline;
             send.connections = connections;
             send.driver = driver;
-            send.sendBuffer = sendBufferConcurrent;
-            jobHandle = send.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
-            
-            var result = __driver.ScheduleFlushSend(jobHandle);
-            
-            Clear clear;
-            clear.connections = connections;
-            clear.sendBuffer = sendBufferConcurrent;
+            send.sender = sendBuffer.AsSender();
+            jobHandle = send.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
 
-            jobHandle = clear.ScheduleByRef(__connections, innerloopBatchCount, jobHandle);
-            
-            return JobHandle.CombineDependencies(jobHandle, result);
+            jobHandle = __driver.ScheduleFlushSend(jobHandle);
+            return jobHandle;
         }
     }
 }

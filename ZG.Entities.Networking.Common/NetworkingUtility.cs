@@ -1,5 +1,6 @@
 using System;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 using Unity.Networking.Transport;
 
 namespace ZG
@@ -109,6 +110,22 @@ namespace ZG
             relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
             id = reader.ReadPackedUInt(streamCompressionModel);
             reader.Flush();
+        }
+
+        public static void Write(this ref DataStreamWriter writer, ref DataStreamReader reader)
+        {
+            int length = reader.Length;
+            NativeArray<byte> bytes;
+            unsafe
+            {
+                int byteOffset = reader.GetBytesRead();
+                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>((byte*)reader.GetUnsafeReadOnlyPtr() + byteOffset, length - byteOffset,
+                    Allocator.None, true);
+            }
+
+            writer.WriteBytes(bytes);
+            
+            reader.SeekSet(length);
         }
     }
 }

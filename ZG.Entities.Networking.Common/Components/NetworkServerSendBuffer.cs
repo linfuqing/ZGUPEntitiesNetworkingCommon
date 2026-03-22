@@ -117,8 +117,9 @@ public struct NetworkServerSendBuffer
         private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
         [ReadOnly]
         private NativeArray<byte> __payloads;
-        private NativeArray<Channel> __channels;
 
+        [NativeDisableParallelForRestriction]
+        private NativeArray<Channel> __channels;
         [NativeDisableParallelForRestriction]
         private NativeArray<UnsafeList<int>> __targets;
         [NativeDisableParallelForRestriction]

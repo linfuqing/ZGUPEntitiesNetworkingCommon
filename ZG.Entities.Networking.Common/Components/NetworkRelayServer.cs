@@ -59,20 +59,7 @@ namespace ZG
             writer.WritePackedInt(type, streamCompressionModel);
             writer.WritePackedInt(relayType, streamCompressionModel);
             writer.WritePackedUInt(id, streamCompressionModel);
-            writer.Flush();
-            
-            int byteOffset = reader.GetBytesRead(), numBytes = reader.Length - byteOffset;
-
-            NativeArray<byte> bytes;
-            unsafe
-            {
-                bytes = CollectionHelper.ConvertExistingDataToNativeArray<byte>((byte*)reader.GetUnsafeReadOnlyPtr() + byteOffset, numBytes,
-                    Allocator.None, true);
-            }
-
-            writer.WriteBytes(bytes);
-            
-            reader.SeekSet(reader.Length);
+            writer.Write(ref reader);
         }
 
         public NetworkRelayServerIdentity(uint id, in AllocatorManager.AllocatorHandle allocator)

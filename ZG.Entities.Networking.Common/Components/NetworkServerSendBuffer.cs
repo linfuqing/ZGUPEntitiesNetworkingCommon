@@ -574,7 +574,9 @@ public struct NetworkServerSendBuffer
         else
             __targets.ElementAt(connectionIndex.value).Clear();
 
-        int channelCount = this.channelCount, destinationBufferCount = GetBufferCountPerConnection(channelCount, connectionCount) * connectionCount, sourceBufferCount = __buffers.Length;
+        int channelCount = this.channelCount,
+            destinationBufferCount = GetBufferCountPerConnection(channelCount, connectionCount) * connectionCount,
+            sourceBufferCount = __buffers.Length;
         if (sourceBufferCount < destinationBufferCount)
         {
             __buffers.ResizeUninitialized(destinationBufferCount);
@@ -584,14 +586,18 @@ public struct NetworkServerSendBuffer
         }
 
         destinationBufferCount = math.min(destinationBufferCount, sourceBufferCount);
-        sourceBufferCount = GetBufferCountPerConnection(ChannelCount == 0 ? connectionIndex.channelIndex : ChannelCount, connectionIndex.value) * connectionIndex.value;
+        sourceBufferCount =
+            GetBufferCountPerConnection(ChannelCount == 0 ? connectionIndex.channelIndex : ChannelCount,
+                connectionIndex.value) * connectionIndex.value;
         for (int i = sourceBufferCount; i < destinationBufferCount; i++)
             __buffers.ElementAt(i).Clear();
 
         __sendAllConnectionIndices.Capacity = math.max(__sendAllConnectionIndices.Capacity, connectionCount);
 
-        __sendChannelConnectionIndices.Capacity = math.max(__sendChannelConnectionIndices.Capacity, channelCount * connectionCount);
-        __sendIdentityConnectionIndices.Capacity = math.max(__sendIdentityConnectionIndices.Capacity, connectionCount * connectionCount);
+        __sendChannelConnectionIndices.Capacity =
+            math.max(__sendChannelConnectionIndices.Capacity, channelCount * connectionCount);
+        __sendIdentityConnectionIndices.Capacity =
+            math.max(__sendIdentityConnectionIndices.Capacity, connectionCount * connectionCount);
 
         return id;
     }
@@ -642,7 +648,7 @@ public struct NetworkServerSendBuffer
 
     public static int GetBufferIndex(int target, int channelCount, int connectionIndex, int connectionCount)
     {
-        return target + connectionCount + GetBufferCountPerConnection(channelCount, connectionCount) * connectionIndex;
+        return target + channelCount + GetBufferCountPerConnection(channelCount, connectionCount) * connectionIndex;
     }
 
     public static int GetBufferTarget(int bufferIndex, int channelCount, int connectionCount, out int connectionIndex)

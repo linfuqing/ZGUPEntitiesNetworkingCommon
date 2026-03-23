@@ -365,6 +365,8 @@ public struct NetworkServerSendBuffer
                 index = 0;
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);
+                
+                __Log($"Send All {id}");
             }
 
             foreach (int channel in __channels[connectionIndex.channelIndex])
@@ -379,6 +381,8 @@ public struct NetworkServerSendBuffer
                     index = 0;
                     if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                         sendBuffer.value.Append(buffer, index);
+                    
+                    __Log($"Send Channel {channel} : {id}");
                 }
             }
 
@@ -392,6 +396,8 @@ public struct NetworkServerSendBuffer
                 index = 0;
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);
+
+                __Log($"Send To {id}");
             }
 
             __sendBuffers[connectionIndex.value] = sendBuffer;
@@ -514,7 +520,7 @@ public struct NetworkServerSendBuffer
         {
             if(connectionIndex.value != -1)
             {
-                UnityEngine.Debug.LogError($"connection id mismatch: {id}");
+                //UnityEngine.Debug.LogError($"connection id mismatch: {id}");
 
                 connection = __connections[connectionIndex.value];
 
@@ -599,6 +605,7 @@ public struct NetworkServerSendBuffer
         __sendIdentityConnectionIndices.Capacity =
             math.max(__sendIdentityConnectionIndices.Capacity, connectionCount * connectionCount);
 
+        __Log($"Connect {id}");
         return id;
     }
 
@@ -628,6 +635,8 @@ public struct NetworkServerSendBuffer
         connectionIndex.value = -1;
         __connectionIndices[id] = connectionIndex;
 
+        __Log($"Disconnect {id}");
+        
         return id;
     }
 
@@ -657,5 +666,10 @@ public struct NetworkServerSendBuffer
         connectionIndex = bufferIndex / bufferCountPerConnection;
 
         return bufferIndex - connectionIndex * bufferCountPerConnection - connectionCount;
+    }
+    
+    private static void __Log(string message)
+    {
+        UnityEngine.Debug.Log(message);
     }
 }

@@ -9,7 +9,7 @@ namespace ZG
     {
         Connect, 
         Disconnect,
-        Init,
+        Status,
         Create,
         Join,
         Leave,
@@ -28,7 +28,10 @@ namespace ZG
     public enum NetworkRelayChannelFlag
     {
         Online = 0x01, 
-        Creator = 0x02
+        Creator = 0x02, 
+        
+        ShiftToStatus = 2, 
+        All = Online | Creator, 
     }
 
     public enum NetworkPipelineStage

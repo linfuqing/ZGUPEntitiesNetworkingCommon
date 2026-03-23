@@ -85,11 +85,23 @@ namespace ZG
             //__bytes.Clear();
         }
 
-        /*public void Init(ref DataStreamReader reader)
+        public void SetStatus(int value, ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            __bytes.Resize(reader.Length - reader.GetBytesRead(), NativeArrayOptions.UninitializedMemory);
-            reader.ReadBytes(AsArray());
-        }*/
+            if (sendBuffer.BeginWrite(channel, out var writer))
+            {
+                var channelFlag = this.channelFlag;
+                channelFlag &= ~NetworkRelayChannelFlag.All;
+                channelFlag |= (NetworkRelayChannelFlag)(value << (int)NetworkRelayChannelFlag.ShiftToStatus);
+                this.channelFlag = channelFlag;
+                
+                var streamCompressionModel = StreamCompressionModel.Default;
+                writer.WritePackedInt((int)NetworkRelayMessageType.Status, streamCompressionModel);
+                writer.WritePackedInt((int)channelFlag, streamCompressionModel);
+                writer.WriteBytes(sendBuffer.GetPayload(ID));
+
+                sendBuffer.EndWrite(writer);
+            }
+        }
 
         public void SendHeader(
             int type,
@@ -320,12 +332,8 @@ namespace ZG
             int type = reader.ReadPackedInt(streamCompressionModel), channel, numIdentities;
             switch ((NetworkRelayMessageType)type)
             {
-                case NetworkRelayMessageType.Init:
-                    if (sendBuffer.BeginWrite(sendBuffer.ID, out writer))
-                    {
-                        writer.WritePackedInt(type, streamCompressionModel);
-                        sendBuffer.EndWrite(writer);
-                    }
+                case NetworkRelayMessageType.Status:
+                    identity.SetStatus(reader.ReadPackedInt(streamCompressionModel), ref sendBuffer);
 
                     break;
                 case NetworkRelayMessageType.Create:

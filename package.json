@@ -1,7 +1,7 @@
 {
   "name": "cn.com.zerogame.unitypackages.entities.networking.common",
   "displayName": "ZGUP Entities Networking Common",
-  "version": "0.3.3",
+  "version": "0.3.5",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

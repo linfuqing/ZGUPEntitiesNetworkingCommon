@@ -1,14 +1,9 @@
 using System;
-using Unity.Jobs;
-using Unity.Burst;
-using Unity.Entities;
 using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 using Unity.Networking.Transport;
-using Unity.Networking.Transport.Error;
 using ZG;
-using static PlasticPipe.Client.InvokeMethodRetry;
 
 public struct NetworkServerSendBuffer
 {
@@ -194,7 +189,7 @@ public struct NetworkServerSendBuffer
 
         public bool BeginWrite(uint id, uint targetID, out DataStreamWriter writer, ushort capacity = 1024)
         {
-            if (__connectionIndices.TryGetValue(targetID, out var connectionIndex))
+            if (!__connectionIndices.TryGetValue(targetID, out var connectionIndex))
             {
                 writer = default;
                 return false;
@@ -221,7 +216,7 @@ public struct NetworkServerSendBuffer
 
                 if (target > 0)
                     __sendIdentityConnectionIndices.Add(target - 1, connectionIndex);
-                else if (target < 1)
+                else if (target < 0)
                     __sendChannelConnectionIndices.Add(-target - 1, connectionIndex);
                 else
                     __sendAllConnectionIndices.AddNoResize(connectionIndex);
@@ -230,7 +225,7 @@ public struct NetworkServerSendBuffer
 
         private bool __BeginWrite(ushort capacity, int target, uint id, out DataStreamWriter writer)
         {
-            if (__connectionIndices.TryGetValue(id, out var connectionIndex))
+            if (!__connectionIndices.TryGetValue(id, out var connectionIndex))
             {
                 writer = default;
                 return false;
@@ -242,6 +237,8 @@ public struct NetworkServerSendBuffer
 
             if (!buffer.BeginWrite(out writer, capacity))
                 return false;
+
+            __buffers[bufferIndex] = buffer;
 
             writer.m_SendHandleData = (IntPtr)bufferIndex;
 
@@ -257,7 +254,7 @@ public struct NetworkServerSendBuffer
 
         private Concurrent __sendBuffer;
 
-        public int cnnectionIndex => __sendBuffer.GetConnectionIndex(ID);
+        public int connectionIndex => __sendBuffer.GetConnectionIndex(ID);
 
         public int channelIndex => __sendBuffer.GetChannelIndex(ID);
 
@@ -396,6 +393,8 @@ public struct NetworkServerSendBuffer
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);
             }
+
+            __sendBuffers[connectionIndex.value] = sendBuffer;
         }
     }
 
@@ -413,7 +412,7 @@ public struct NetworkServerSendBuffer
 
     public readonly int ChannelCount;
 
-    public int channelCount => ChannelCount == 0 ? 0 : __channels.Length;
+    public int channelCount => ChannelCount == 0 ? __channels.Length : 0;
 
     public unsafe AllocatorManager.AllocatorHandle allocator => __connections.GetUnsafeList()->Allocator;
 
@@ -423,7 +422,7 @@ public struct NetworkServerSendBuffer
 
     public NetworkServerSendBuffer(in AllocatorManager.AllocatorHandle allocator, int channelCount = 0)
     {
-        ChannelCount = 0;
+        ChannelCount = channelCount;
 
         __connectionIDs = new NativeHashMap<NetworkConnection, uint>(1, allocator);
         __connectionIndices = new NativeHashMap<uint, ConnectionIndex> (1, allocator);

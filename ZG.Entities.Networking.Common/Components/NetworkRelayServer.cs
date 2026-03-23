@@ -95,7 +95,7 @@ namespace ZG
             int type,
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            if (sendBuffer.BeginWrite(ID, out var writer))
+            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
             {
                 __WriteHeader(sendBuffer.ID != ID, type, sendBuffer.GetPayload(ID), ref writer);
 
@@ -110,7 +110,7 @@ namespace ZG
         {
             if (sendBuffer.BeginWrite(channel, out var writer))
             {
-                __WriteHeader(sendBuffer.ID != ID, type, sendBuffer.GetPayload(ID), ref writer);
+                __WriteHeader(true, type, sendBuffer.GetPayload(ID), ref writer);
 
                 sendBuffer.EndWrite(writer);
             }
@@ -190,7 +190,7 @@ namespace ZG
                 writer.WriteBytes(payload);
             }
         }
-        
+
         private bool __CreateOrJoin(
             int type, 
             int channel,

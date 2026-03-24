@@ -97,7 +97,7 @@ namespace ZG
                 var streamCompressionModel = StreamCompressionModel.Default;
                 writer.WritePackedInt((int)NetworkRelayMessageType.Status, streamCompressionModel);
                 writer.WritePackedInt((int)channelFlag, streamCompressionModel);
-                writer.WriteBytes(sendBuffer.GetPayload(ID));
+                writer.WritePackedUInt(ID, streamCompressionModel);
 
                 sendBuffer.EndWrite(writer);
             }
@@ -284,6 +284,7 @@ namespace ZG
                 {
                     var streamCompressionModel = StreamCompressionModel.Default;
                     writer.WritePackedInt((int)NetworkRelayMessageType.Connect, streamCompressionModel);
+                    writer.WritePackedInt((int)identity.channelFlag, streamCompressionModel);
                     writer.WritePackedUInt(sendBuffer.ID, streamCompressionModel);
                         
                     sendBuffer.EndWrite(writer);

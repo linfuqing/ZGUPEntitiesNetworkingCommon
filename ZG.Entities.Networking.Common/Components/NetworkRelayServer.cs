@@ -90,7 +90,7 @@ namespace ZG
             if (sendBuffer.BeginWrite(channel, out var writer))
             {
                 var channelFlag = this.channelFlag;
-                channelFlag &= ~NetworkRelayChannelFlag.All;
+                channelFlag &= NetworkRelayChannelFlag.All;
                 channelFlag |= (NetworkRelayChannelFlag)(value << (int)NetworkRelayChannelFlag.ShiftToStatus);
                 this.channelFlag = channelFlag;
                 
@@ -194,13 +194,10 @@ namespace ZG
             writer.WritePackedInt(type, streamCompressionModel);
             //writer.WritePackedInt(identityIndex, streamCompressionModel);
             writer.WritePackedInt(channel, streamCompressionModel);
+            writer.WritePackedInt((int)channelFlag, streamCompressionModel);
 
             if (isSendOthers)
-            {
-                writer.WritePackedInt((int)channelFlag, streamCompressionModel);
-                
                 writer.WriteBytes(payload);
-            }
         }
 
         private bool __CreateOrJoin(
@@ -242,6 +239,7 @@ namespace ZG
     public struct NetworkRelayServerListener : INetworkServerListener
     {
         public NativeList<NetworkRelayServerIdentity> identities;
+        public NativeList<uint> ids;
         public NativeParallelHashMap<uint, int> idChannels;
 
         public void Connect(in NetworkConnection connection, uint id, int connectionIndex, int channelIndex, NativeArray<byte> payload)
@@ -254,7 +252,9 @@ namespace ZG
 
                 identities.Add(new NetworkRelayServerIdentity(id, Allocator.Persistent));
 
-                idChannels.Capacity = Unity.Mathematics.math.max(idChannels.Capacity, identities.Length);
+                int numIdentities = identities.Length;
+                ids.Capacity = Unity.Mathematics.math.max(ids.Capacity, numIdentities);
+                idChannels.Capacity = Unity.Mathematics.math.max(idChannels.Capacity, numIdentities);
             }
         }
 
@@ -269,6 +269,7 @@ namespace ZG
         [NativeDisableParallelForRestriction] 
         public NativeArray<NetworkRelayServerIdentity> identities;
         public NativeParallelHashMap<uint, int>.ParallelWriter idChannels;
+        public NativeList<uint>.ParallelWriter ids;
 
         public void Connect(ref NetworkServerSendBuffer.Identity sendBuffer)
         {
@@ -421,9 +422,9 @@ namespace ZG
     public struct NetworkRelayServer : IComponentData
     {
         [BurstCompile]
-        private struct Drop : IJobParallelFor
+        private struct Drop : IJobParallelForDefer
         {
-            [ReadOnly, DeallocateOnJobCompletion]
+            [ReadOnly]
             public NativeArray<uint> ids;
 
             [ReadOnly]
@@ -444,17 +445,39 @@ namespace ZG
                     return;
 
                 identity.Drop(ref sendBuffer);
+                identities[sendBuffer.channelIndex] = identity;
             }
         }
 
         [BurstCompile]
         private struct Clear : IJob
         {
+            public NativeList<uint> ids;
             public NativeParallelHashMap<uint, int> idChannels;
 
             public void Execute()
             {
+                ids.Clear();
                 idChannels.Clear();
+            }
+        }
+
+        private struct Scheduler : INetworkServerScheduler
+        {
+            public int innerloopBatchCount;
+            public NetworkServerSendBuffer sendBuffer;
+            public NativeParallelHashMap<uint, int> idChannels;
+            public NativeList<uint> ids;
+            public NativeList<NetworkRelayServerIdentity> identities;
+            
+            public JobHandle Schedule(in JobHandle dependsOn)
+            {
+                Drop drop;
+                drop.ids = ids.AsDeferredJobArray();
+                drop.idChannels = idChannels;
+                drop.sendBuffer = sendBuffer.AsConcurrent();
+                drop.identities = identities.AsDeferredJobArray();
+                return drop.ScheduleByRef(ids, innerloopBatchCount, dependsOn);
             }
         }
 
@@ -465,6 +488,7 @@ namespace ZG
 
         private NativeList<NetworkRelayServerIdentity> __identities;
 
+        private NativeList<uint> __ids;
         private NativeParallelHashMap<uint, int> __idChannels;
 
         public NetworkRelayServer(
@@ -478,6 +502,7 @@ namespace ZG
 
             __identities = new NativeList<NetworkRelayServerIdentity>(allocator);
 
+            __ids = new NativeList<uint>(allocator);
             __idChannels = new NativeParallelHashMap<uint, int>(1, allocator);
 
             Pipeline = __instance.CreatePipeline(stages);
@@ -520,6 +545,7 @@ namespace ZG
             __instance.Dispose();
             __sendBuffer.Dispose();
             __identities.Dispose();
+            __ids.Dispose();
             __idChannels.Dispose();
         }
 
@@ -537,28 +563,32 @@ namespace ZG
             int innerloopBatchCount,
             in JobHandle inputDeps)
         {
-            Drop drop;
-            drop.ids = __idChannels.GetKeyArray(Allocator.TempJob);
-            drop.idChannels = __idChannels;
-            drop.sendBuffer = __sendBuffer.AsConcurrent();
-            drop.identities = __identities.AsArray();
-            var jobHandle = drop.ScheduleByRef(drop.ids.Length, innerloopBatchCount, inputDeps);
-
-            Clear clear;
-            clear.idChannels = __idChannels;
-            jobHandle = clear.ScheduleByRef(jobHandle);
-
             NetworkRelayServerListener listener;
             listener.identities = __identities;
+            listener.ids = __ids;
             listener.idChannels = __idChannels;
 
             NetworkRelayServerHandler handler;
             handler.identities = __identities.AsDeferredJobArray();
+            handler.ids = __ids.AsParallelWriter();
             handler.idChannels = __idChannels.AsParallelWriter();
 
-            return __instance.Schedule(ref listener, ref handler, ref __sendBuffer, 
+            Scheduler scheduler;
+            scheduler.innerloopBatchCount = innerloopBatchCount;
+            scheduler.sendBuffer = __sendBuffer;
+            scheduler.identities = __identities;
+            scheduler.idChannels = __idChannels;
+            scheduler.ids = __ids;
+
+            var jobHandle = __instance.Schedule(ref listener, ref handler, ref scheduler, ref __sendBuffer, 
                 innerloopBatchCount, Pipeline, 
-                in jobHandle);
+                in inputDeps);
+            
+            Clear clear;
+            clear.ids = __ids;
+            clear.idChannels = __idChannels;
+            return JobHandle.CombineDependencies(jobHandle, clear.ScheduleByRef(jobHandle));
+
         }
     }
 }

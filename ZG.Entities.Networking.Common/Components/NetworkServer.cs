@@ -36,6 +36,11 @@ namespace ZG
             ref NetworkServerSendBuffer.Identity sendBuffer);
     }
 
+    public interface INetworkServerScheduler
+    {
+        JobHandle Schedule(in JobHandle dependsOn);
+    }
+
     [BurstCompile]
     public struct NetworkServerInitJob<T> : IJob where T : unmanaged, INetworkServerListener
     {
@@ -264,15 +269,17 @@ namespace ZG
             __driver.Disconnect(connection);
         }
 
-        public JobHandle Schedule<TListener, THandler>(
+        public JobHandle Schedule<TListener, THandler, TScheduler>(
             ref TListener listener, 
             ref THandler handler, 
+            ref TScheduler scheduler,
             ref NetworkServerSendBuffer sendBuffer,
             int innerloopBatchCount, 
             in NetworkPipeline pipeline, 
             in JobHandle inputDeps) 
             where TListener : unmanaged, INetworkServerListener
             where THandler : unmanaged, INetworkServerHandler
+            where TScheduler : unmanaged, INetworkServerScheduler
         {
             var driver = __driver.ToConcurrent();
             
@@ -301,6 +308,8 @@ namespace ZG
             popEvents.connectionIDs = sendBuffer.connectionIDs;
 
             jobHandle = popEvents.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
+
+            jobHandle = scheduler.Schedule(jobHandle);
             
             Send send;
             send.pipeline = pipeline;

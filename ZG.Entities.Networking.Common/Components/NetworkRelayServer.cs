@@ -365,8 +365,8 @@ namespace ZG
                 case NetworkRelayMessageType.Drop:
                     var id = reader.ReadPackedUInt(streamCompressionModel);
                     identityIndex = sendBuffer.GetChannelIndex(id);
-                    if (identityIndex != -1)
-                        idChannels.TryAdd(id, identities[identityIndex].channel);
+                    if (identityIndex != -1 && idChannels.TryAdd(id, identities[identityIndex].channel))
+                        ids.AddNoResize(id);
                     /*if (identities[identityIndices[id]].channel == identity.channel && 
                         sendBuffer.BeginWrite(pipelineIndexCustom, out writer))
                     {

@@ -20,6 +20,12 @@ public struct NetworkServerSendBuffer
     {
         public int index;
         public NetworkSendBuffer value;
+
+        public void Clear()
+        {
+            index = 0;
+            value.Clear();
+        }
     }
 
     private struct Channel
@@ -629,6 +635,8 @@ public struct NetworkServerSendBuffer
                 __connectionIndices[tempID] = tempConnectionIndex;
             }
         }
+        
+        //__sendBuffers.ElementAt(connectionIndex.value).Clear();
 
         __connections.RemoveAt(connectionIndex.value);
 

@@ -329,7 +329,6 @@ namespace ZG
             var identity = identities[identityIndex];
 
             NetworkRelayServerIdentity channelIdentity;
-            DataStreamWriter writer;
             var streamCompressionModel = StreamCompressionModel.Default;
             int type = reader.ReadPackedInt(streamCompressionModel), channel, numIdentities;
             switch ((NetworkRelayMessageType)type)

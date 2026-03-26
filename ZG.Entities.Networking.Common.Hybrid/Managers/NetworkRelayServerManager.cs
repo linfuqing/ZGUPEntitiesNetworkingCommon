@@ -34,7 +34,7 @@ namespace ZG
         internal NetworkPipelineStage[] _stages = new NetworkPipelineStage[]
         {
             NetworkPipelineStage.Fragmentation,
-            NetworkPipelineStage.UnreliableSequenced,
+            NetworkPipelineStage.ReliableSequenced,
         };
 
         private NetworkRelayServer __instance;

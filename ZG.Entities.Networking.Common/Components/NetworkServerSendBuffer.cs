@@ -212,7 +212,7 @@ public struct NetworkServerSendBuffer
             buffer.EndWrite(writer);
             __buffers[value] = buffer;
 
-            int numConnections = __targets.Length, target = GetBufferTarget(value, __GetChannelCount(), numConnections, out int connectionIndex);
+            int target = GetBufferTarget(value, __GetChannelCount(), __connectionIndices.Count, out int connectionIndex);
             var targets = __targets[connectionIndex];
             if(targets.IndexOf(target) == -1)
             {
@@ -665,7 +665,10 @@ public struct NetworkServerSendBuffer
 
     public static int GetBufferIndex(int target, int channelCount, int connectionIndex, int connectionCount)
     {
-        return target + channelCount + GetBufferCountPerConnection(channelCount, connectionCount) * connectionIndex;
+        int result = target + channelCount + GetBufferCountPerConnection(channelCount, connectionCount) * connectionIndex;
+
+        UnityEngine.Assertions.Assert.AreEqual(GetBufferTarget(result, channelCount, connectionCount, out _), result);
+        return result;
     }
 
     public static int GetBufferTarget(int bufferIndex, int channelCount, int connectionCount, out int connectionIndex)
@@ -673,7 +676,10 @@ public struct NetworkServerSendBuffer
         int bufferCountPerConnection = GetBufferCountPerConnection(channelCount, connectionCount);
         connectionIndex = bufferIndex / bufferCountPerConnection;
 
-        return bufferIndex - connectionIndex * bufferCountPerConnection - connectionCount;
+        int result = bufferIndex - connectionIndex * bufferCountPerConnection - connectionCount;
+        UnityEngine.Assertions.Assert.AreEqual(GetBufferIndex(result, channelCount, connectionIndex, connectionCount), result);
+
+        return result;
     }
     
     private static void __Log(string message)

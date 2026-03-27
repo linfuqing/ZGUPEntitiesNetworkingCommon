@@ -25,7 +25,7 @@ namespace ZG
     }
 
     [Flags]
-    public enum NetworkRelayChannelFlag
+    public enum NetworkRelayChannelFlag : byte
     {
         Online = 0x01, 
         Creator = 0x02, 

@@ -31,7 +31,7 @@ namespace ZG
 
         public bool isOnline
         {
-            get => channelFlag.HasFlag(NetworkRelayChannelFlag.Online);
+            get => (channelFlag & NetworkRelayChannelFlag.Online) == NetworkRelayChannelFlag.Online;
 
             set
             {
@@ -94,13 +94,14 @@ namespace ZG
 
         public void SetStatus(int value, ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            if (sendBuffer.BeginWrite(channel, out var writer))
+            var channelFlag = this.channelFlag;
+            channelFlag &= NetworkRelayChannelFlag.All;
+            channelFlag |= (NetworkRelayChannelFlag)(value << (int)NetworkRelayChannelFlag.ShiftToStatus);
+            this.channelFlag = channelFlag;
+
+            var channel = this.channel;
+            if (channel != CHANNEL_NULL && sendBuffer.BeginWrite(channel, out var writer))
             {
-                var channelFlag = this.channelFlag;
-                channelFlag &= NetworkRelayChannelFlag.All;
-                channelFlag |= (NetworkRelayChannelFlag)(value << (int)NetworkRelayChannelFlag.ShiftToStatus);
-                this.channelFlag = channelFlag;
-                
                 var streamCompressionModel = StreamCompressionModel.Default;
                 writer.WritePackedInt((int)NetworkRelayMessageType.Status, streamCompressionModel);
                 writer.WritePackedInt((int)channelFlag, streamCompressionModel);
@@ -210,7 +211,7 @@ namespace ZG
             int channel,
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            if (!sendBuffer.AddChannel(channel))
+            if (!sendBuffer.AddChannel(ID, channel))
                 return false;
 
             Leave(ref sendBuffer);
@@ -230,7 +231,7 @@ namespace ZG
             if (channel == CHANNEL_NULL)
                 return;
             
-            if (sendBuffer.RemoveChannel(channel))
+            if (sendBuffer.RemoveChannel(ID, channel))
             {
                 SendHeader(type, ref sendBuffer);
                 SendHeader(channel, type, ref sendBuffer);
@@ -372,9 +373,26 @@ namespace ZG
                 case NetworkRelayMessageType.Drop:
                     var id = reader.ReadPackedUInt(streamCompressionModel);
                     identityIndex = sendBuffer.GetChannelIndex(id);
-                    if (identityIndex != -1 && idChannels.TryAdd(id, identities[identityIndex].channel))
-                        ids.AddNoResize(id);
-                    /*if (identities[identityIndices[id]].channel == identity.channel && 
+                    if (identityIndex != -1)
+                    {
+                        channelIdentity =  identities[identityIndex];
+                        int identityChannel = channelIdentity.channel;
+                        if (identityChannel != NetworkRelayServerIdentity.CHANNEL_NULL)
+                        {
+                            if (idChannels.TryAdd(id, identityChannel))
+                                ids.AddNoResize(id);
+
+                            if (!channelIdentity.isOnline)
+                            {
+                                channelIdentity.SendHeader((int)NetworkRelayMessageType.Drop,
+                                    ref sendBuffer);
+                                channelIdentity.SendHeader(identityChannel, (int)NetworkRelayMessageType.Drop,
+                                    ref sendBuffer);
+                            }
+                        }
+                    }
+
+                    /*if (identities[identityIndices[id]].channel == identity.channel &&
                         sendBuffer.BeginWrite(pipelineIndexCustom, out writer))
                     {
                         writer.WritePackedInt(type, streamCompressionModel);

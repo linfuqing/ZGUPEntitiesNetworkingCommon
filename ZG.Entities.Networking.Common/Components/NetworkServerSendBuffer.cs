@@ -190,12 +190,14 @@ public struct NetworkServerSendBuffer
 
         public bool BeginWrite(uint id, int channel, out DataStreamWriter writer, ushort capacity = 1024)
         {
+            UnityEngine.Assertions.Assert.IsFalse(channel < 0);
+            
             return __BeginWrite(capacity, GetTargetFromChannel(channel), id, out writer);
         }
 
         public bool BeginWrite(uint id, uint targetID, out DataStreamWriter writer, ushort capacity = 1024)
         {
-            if (!__connectionIndices.TryGetValue(targetID, out var connectionIndex))
+            if (!__connectionIndices.TryGetValue(targetID, out var connectionIndex) || connectionIndex.value == -1)
             {
                 writer = default;
                 return false;
@@ -231,7 +233,7 @@ public struct NetworkServerSendBuffer
 
         private bool __BeginWrite(ushort capacity, int target, uint id, out DataStreamWriter writer)
         {
-            if (!__connectionIndices.TryGetValue(id, out var connectionIndex))
+            if (!__connectionIndices.TryGetValue(id, out var connectionIndex) || connectionIndex.value == -1)
             {
                 writer = default;
                 return false;
@@ -278,12 +280,12 @@ public struct NetworkServerSendBuffer
             return __sendBuffer.GetPayload(id);
         }
 
-        public bool AddChannel(int value)
+        public bool AddChannel(uint id, int value)
         {
             return __sendBuffer.AddChannel(ID, value);
         }
 
-        public bool RemoveChannel(int value)
+        public bool RemoveChannel(uint id, int value)
         {
             return __sendBuffer.RemoveChannel(ID, value);
         }
@@ -372,7 +374,7 @@ public struct NetworkServerSendBuffer
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);
                 
-                __Log($"Send All {id}");
+                __Log($"Send To {id}");
             }
 
             foreach (int channel in __channels[connectionIndex.channelIndex])
@@ -403,7 +405,7 @@ public struct NetworkServerSendBuffer
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);
 
-                __Log($"Send To {id}");
+                __Log($"Send All {id}");
             }
 
             __sendBuffers[connectionIndex.value] = sendBuffer;

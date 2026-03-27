@@ -236,7 +236,7 @@ namespace ZG
                 SendHeader(channel, type, ref sendBuffer);
             }
 
-            channelFlag = 0;
+            channelFlag &= ~NetworkRelayChannelFlag.Creator;
             channel = CHANNEL_NULL;
         }
     }
@@ -341,6 +341,8 @@ namespace ZG
             {
                 case NetworkRelayMessageType.Status:
                     identity.SetStatus(reader.ReadPackedInt(streamCompressionModel), ref sendBuffer);
+
+                    identities[identityIndex] = identity;
 
                     break;
                 case NetworkRelayMessageType.Create:

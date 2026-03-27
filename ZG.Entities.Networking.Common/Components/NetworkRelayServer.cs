@@ -14,6 +14,13 @@ using Unity.Burst;
 
 namespace ZG
 {
+    public struct NetworkRelayServerMatch
+    {
+        public int playerCount;
+
+        public float distanceTime;
+    }
+    
     public struct NetworkRelayServerIdentity
     {
         public const int CHANNEL_NULL = -1;
@@ -281,23 +288,24 @@ namespace ZG
             int channel = identity.channel;
             if (channel != NetworkRelayServerIdentity.CHANNEL_NULL)
             {
+                var channelFlag = identity.channelFlag;
                 if (sendBuffer.BeginWrite(channel, out var writer))
                 {
                     var streamCompressionModel = StreamCompressionModel.Default;
                     writer.WritePackedInt((int)NetworkRelayMessageType.Connect, streamCompressionModel);
-                    writer.WritePackedInt((int)identity.channelFlag, streamCompressionModel);
+                    writer.WritePackedInt((int)channelFlag, streamCompressionModel);
                     writer.WritePackedUInt(sendBuffer.ID, streamCompressionModel);
                         
                     sendBuffer.EndWrite(writer);
                 }
                 
-                identity.SendHeader((identity.channelFlag & NetworkRelayChannelFlag.Creator) ==
+                identity.SendHeader((channelFlag & NetworkRelayChannelFlag.Creator) ==
                     NetworkRelayChannelFlag.Creator
                         ? (int)NetworkRelayMessageType.Create
                         : (int)NetworkRelayMessageType.Join,
                     ref sendBuffer);
 
-                __SendChannelJoins(identityIndex, identity.channel, ref sendBuffer);
+                __SendChannelJoins(identityIndex, channel, ref sendBuffer);
             }
         }
 
@@ -306,7 +314,7 @@ namespace ZG
             var identityIndex = sendBuffer.channelIndex;
             var identity = identities[identityIndex];
             int channel = identity.channel;
-            if (channel != 0)
+            if (channel != NetworkRelayServerIdentity.CHANNEL_NULL)
             {
                 if (sendBuffer.BeginWrite(channel, out var writer))
                 {
@@ -420,6 +428,16 @@ namespace ZG
 
     public struct NetworkRelayServer : IComponentData
     {
+        private struct Matcher
+        {
+            [ReadOnly]
+            public NativeParallelMultiHashMap<int, uint> distanceIDs;
+            
+            [ReadOnly]
+            public NativeArray<NetworkRelayServerIdentity> identities;
+
+        }
+        
         [BurstCompile]
         private struct Drop : IJobParallelForDefer
         {

@@ -676,7 +676,7 @@ public struct NetworkServerSendBuffer
         int bufferCountPerConnection = GetBufferCountPerConnection(channelCount, connectionCount);
         connectionIndex = bufferIndex / bufferCountPerConnection;
 
-        int result = bufferIndex - connectionIndex * bufferCountPerConnection - connectionCount;
+        int result = bufferIndex - connectionIndex * bufferCountPerConnection - channelCount;//connectionCount;
         UnityEngine.Assertions.Assert.AreEqual(GetBufferIndex(result, channelCount, connectionIndex, connectionCount), result);
 
         return result;

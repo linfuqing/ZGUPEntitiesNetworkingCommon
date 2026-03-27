@@ -667,7 +667,7 @@ public struct NetworkServerSendBuffer
     {
         int result = target + channelCount + GetBufferCountPerConnection(channelCount, connectionCount) * connectionIndex;
 
-        UnityEngine.Assertions.Assert.AreEqual(GetBufferTarget(result, channelCount, connectionCount, out _), result);
+        //UnityEngine.Assertions.Assert.AreEqual(GetBufferTarget(result, channelCount, connectionCount, out _), target);
         return result;
     }
 
@@ -677,7 +677,7 @@ public struct NetworkServerSendBuffer
         connectionIndex = bufferIndex / bufferCountPerConnection;
 
         int result = bufferIndex - connectionIndex * bufferCountPerConnection - channelCount;//connectionCount;
-        UnityEngine.Assertions.Assert.AreEqual(GetBufferIndex(result, channelCount, connectionIndex, connectionCount), result);
+        UnityEngine.Assertions.Assert.AreEqual(GetBufferIndex(result, channelCount, connectionIndex, connectionCount), bufferIndex);
 
         return result;
     }

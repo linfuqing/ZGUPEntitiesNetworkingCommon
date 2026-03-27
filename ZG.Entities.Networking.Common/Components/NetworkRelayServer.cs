@@ -182,12 +182,10 @@ namespace ZG
                     if (!sendBuffer.BeginWrite(channel, out writer))
                         return;
                     break;
-                case NetworkRelayType.Identity:
+                default:
                     if (!sendBuffer.BeginWrite(relayType.RelayID(), out writer))
                         return;
                     break;
-                default:
-                    return;
             }
 
             SendRelay(type, (int)relayType, sendBuffer.ID, ref reader, ref writer);

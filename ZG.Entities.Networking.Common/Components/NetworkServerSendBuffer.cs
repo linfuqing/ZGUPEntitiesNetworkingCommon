@@ -412,6 +412,38 @@ public struct NetworkServerSendBuffer
         }
     }
 
+    public struct ReadOnly
+    {
+        [ReadOnly]
+        private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
+        [ReadOnly]
+        private NativeList<byte> __payloads;
+
+        public ReadOnly(ref NetworkServerSendBuffer sendBuffer)
+        {
+            __connectionIndices = sendBuffer.__connectionIndices;
+            __payloads = sendBuffer.__payloads;
+        }
+
+        public bool GetConnection(uint id, out int connectionIndex, out int channelIndex, out NativeArray<byte> payload)
+        {
+            if (!__connectionIndices.TryGetValue(id, out var temp))
+            {
+                connectionIndex = -1;
+                channelIndex = -1;
+                payload = default;
+
+                return false;
+            }
+
+            connectionIndex = temp.value;
+            channelIndex = temp.channelIndex;
+            payload = __payloads.AsArray().GetSubArray(temp.payloadOffset, temp.payloadSize);
+
+            return true;
+        }
+    }
+
     private NativeHashMap<NetworkConnection, uint> __connectionIDs;
     private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
     private NativeList<NetworkConnection> __connections;
@@ -502,23 +534,7 @@ public struct NetworkServerSendBuffer
 
     public Sender AsSender() => new Sender(ref this);
 
-    public bool GetConnection(uint id, out int connectionIndex, out int channelIndex, out NativeArray<byte> payload)
-    {
-        if (!__connectionIndices.TryGetValue(id, out var temp))
-        {
-            connectionIndex = -1;
-            channelIndex = -1;
-            payload = default;
-
-            return false;
-        }
-
-        connectionIndex = temp.value;
-        channelIndex = temp.channelIndex;
-        payload = __payloads.AsArray().GetSubArray(temp.payloadOffset, temp.payloadSize);
-
-        return true;
-    }
+    public ReadOnly AsReadOnly() => new ReadOnly(ref this);
 
     public uint Connect(ref NetworkConnection connection, in NativeArray<byte> payload)
     {

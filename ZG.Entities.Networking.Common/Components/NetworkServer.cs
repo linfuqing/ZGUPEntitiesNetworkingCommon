@@ -97,7 +97,7 @@ namespace ZG
 
                 connectionsToConnect.Add(connection);
 
-                sendBuffer.GetConnection(id, out connectionIndex, out channelIndex, out _);
+                sendBuffer.AsReadOnly().GetConnection(id, out connectionIndex, out channelIndex, out _);
 
                 listener.Connect(connection, id, connectionIndex, channelIndex, payload);
             }

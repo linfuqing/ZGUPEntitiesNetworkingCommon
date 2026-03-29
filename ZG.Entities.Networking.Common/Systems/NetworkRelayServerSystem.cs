@@ -19,7 +19,7 @@ namespace ZG
         {
             var server = SystemAPI.GetSingleton<NetworkRelayServer>();
             
-            state.Dependency = server.Schedule(InnerloopBatchCount, state.Dependency);
+            state.Dependency = server.Schedule(InnerloopBatchCount, SystemAPI.Time.ElapsedTime, state.Dependency);
             
             SystemAPI.SetSingleton(server);
         }

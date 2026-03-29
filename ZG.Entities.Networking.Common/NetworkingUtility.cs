@@ -13,7 +13,10 @@ namespace ZG
         Create,
         Join,
         Leave,
-        Drop, 
+        Drop,
+        Matching,
+        Match,
+        Mismatch, 
         Query
     }
 
@@ -29,9 +32,10 @@ namespace ZG
     {
         Online = 0x01, 
         Creator = 0x02, 
-        
-        ShiftToStatus = 2, 
-        All = Online | Creator, 
+        Matching = 0x04,
+
+        ShiftToStatus = 3, 
+        All = Online | Creator | Matching, 
     }
 
     public enum NetworkPipelineStage
@@ -40,6 +44,28 @@ namespace ZG
         ReliableSequenced,
         UnreliableSequenced,
         Simulator
+    }
+
+    public struct NetworkRelayMatch
+    {
+        public int playerCount;
+        public int distance;
+
+        public float distanceTime;
+
+        public NetworkRelayMatch(ref DataStreamReader reader, in StreamCompressionModel streamCompressionModel)
+        {
+            playerCount = reader.ReadPackedInt(streamCompressionModel);
+            distance = reader.ReadPackedInt(streamCompressionModel);
+            distanceTime = reader.ReadPackedFloat(streamCompressionModel);
+        }
+
+        public void Write(ref DataStreamWriter writer, in StreamCompressionModel streamCompressionModel)
+        {
+            writer.WritePackedInt(playerCount, streamCompressionModel);
+            writer.WritePackedInt(distance, streamCompressionModel);
+            writer.WritePackedFloat(distanceTime, streamCompressionModel);
+        }
     }
 
     public static class NetworkingUtility

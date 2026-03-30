@@ -33,9 +33,10 @@ namespace ZG
     {
         Online = 0x01, 
         Creator = 0x02, 
+        Temp = 0x04, 
 
-        ShiftToStatus = 2, 
-        All = Online | Creator, 
+        ShiftToStatus = 3, 
+        All = Online | Creator | Temp, 
     }
 
     public enum NetworkPipelineStage

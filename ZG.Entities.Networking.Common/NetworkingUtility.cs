@@ -12,6 +12,7 @@ namespace ZG
         Status,
         Create,
         Join,
+        JoinFailed, 
         Leave,
         Drop,
         Matching,
@@ -32,10 +33,9 @@ namespace ZG
     {
         Online = 0x01, 
         Creator = 0x02, 
-        Matching = 0x04,
 
-        ShiftToStatus = 3, 
-        All = Online | Creator | Matching, 
+        ShiftToStatus = 2, 
+        All = Online | Creator, 
     }
 
     public enum NetworkPipelineStage

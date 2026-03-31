@@ -313,7 +313,7 @@ namespace ZG
                         return;
                     break;
                 case NetworkRelayType.Channel:
-                    if (!sendBuffer.BeginWrite(channel, out writer))
+                    if (channel == CHANNEL_NULL || !sendBuffer.BeginWrite(channel, out writer))
                         return;
                     break;
                 default:

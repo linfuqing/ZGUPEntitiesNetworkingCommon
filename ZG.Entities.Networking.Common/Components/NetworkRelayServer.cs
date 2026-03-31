@@ -594,8 +594,9 @@ namespace ZG
                                 {
                                     if (channelID == sendBuffer.ID)
                                         continue;
-                                    
-                                    __ModifyChannel(NetworkRelayServerChannelModifier.Type.Drop, channelIndex, 0,
+
+                                    __ModifyChannel(NetworkRelayServerChannelModifier.Type.Drop, channelIndex,
+                                        NetworkRelayServerIdentity.CHANNEL_NULL,
                                         channelID,
                                         ref sendBuffer);
                                 }
@@ -627,7 +628,8 @@ namespace ZG
 
                             identities[identityIndex] = identity;
 
-                            __ModifyChannel(NetworkRelayServerChannelModifier.Type.Leave, channel, 0, sendBuffer.ID,
+                            __ModifyChannel(NetworkRelayServerChannelModifier.Type.Leave, channel,
+                                NetworkRelayServerIdentity.CHANNEL_NULL, sendBuffer.ID,
                                 ref sendBuffer);
                         }
                     }
@@ -640,7 +642,8 @@ namespace ZG
                         {
                             var identity = identities[identityIndex];
                             int channel = identity.channel;
-                            __ModifyChannel(NetworkRelayServerChannelModifier.Type.Drop, channel, 0, id,
+                            __ModifyChannel(NetworkRelayServerChannelModifier.Type.Drop, channel,
+                                NetworkRelayServerIdentity.CHANNEL_NULL, id,
                                 ref sendBuffer);
                         }
                     }
@@ -931,25 +934,23 @@ namespace ZG
                                 if (identity.channel == channelModifier.source)
                                 {
                                     var sendBuffer = new NetworkServerSendBuffer.Identity(channelModifier.id, ref this.sendBuffer);
-                                    if (identity.Drop(ref sendBuffer))
+                                    if (!identity.isOnline)
                                     {
-                                        if (!identity.isOnline)
+                                        foreach (uint channelID in channelIDs.GetValuesForKey(channelModifier.source))
                                         {
-                                            foreach (uint channelID in channelIDs.GetValuesForKey(channelModifier.source))
+                                            if (identities[sendBuffer.GetChannelIndex(channelID)].isOnline)
                                             {
-                                                sendBuffer = new NetworkServerSendBuffer.Identity(channelID, ref this.sendBuffer);
-                                                ref var channelIdentity =
-                                                    ref identities.ElementAt(sendBuffer.channelIndex);
-                                                if (channelIdentity.isOnline)
-                                                {
-                                                    identity.SendHeader(channelModifier.source, (int)NetworkRelayMessageType.Drop,
-                                                        ref sendBuffer);
+                                                sendBuffer =
+                                                    new NetworkServerSendBuffer.Identity(channelID,
+                                                        ref this.sendBuffer);
 
-                                                    break;
-                                                }
+                                                break;
                                             }
                                         }
-                                        
+                                    }
+                                    
+                                    if (identity.Drop(ref sendBuffer))
+                                    {
                                         channels.ElementAt(channelModifier.source).Leave();
                                         
                                         identities[identityIndex] = identity;

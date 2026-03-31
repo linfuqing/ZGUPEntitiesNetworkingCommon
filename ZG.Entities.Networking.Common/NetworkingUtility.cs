@@ -29,14 +29,14 @@ namespace ZG
     }
 
     [Flags]
-    public enum NetworkRelayChannelFlag : byte
+    public enum NetworkRelayChannelFlag
     {
         Online = 0x01, 
         Creator = 0x02, 
         Temp = 0x04, 
 
         ShiftToStatus = 3, 
-        All = Online | Creator | Temp, 
+        All = Online | Creator | Temp
     }
 
     public enum NetworkPipelineStage

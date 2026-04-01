@@ -803,7 +803,7 @@ namespace ZG
                 int distance = (int)math.ceil((time - match.startTime) / match.value.distanceTime), playerCount = 0, channelPlayerCount, channel;
                 for (int i = 0; i < distance; ++i)
                 {
-                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + 1))
+                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
                     {
                         if (!__CanMatch(true, distanceID, out _, out channel))
                             continue;
@@ -841,7 +841,7 @@ namespace ZG
 
                 for (int i = 0; i < distance; ++i)
                 {
-                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + 1))
+                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
                     {
                         if (!__CanMatch(true, distanceID, out _, out channel))
                             continue;

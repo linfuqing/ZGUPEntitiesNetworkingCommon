@@ -16,6 +16,18 @@ public struct NetworkServerSendBuffer
         public int payloadSize;
     }
 
+    private struct ConnectionOrder : IComparable<ConnectionOrder>
+    {
+        public int value;
+        public int connectionIndex;
+        public int bufferIndex;
+
+        public int CompareTo(ConnectionOrder other)
+        {
+            return value.CompareTo(other.value);
+        }
+    }
+
     private struct SendBuffer
     {
         public int index;
@@ -119,27 +131,31 @@ public struct NetworkServerSendBuffer
         [ReadOnly]
         private NativeArray<byte> __payloads;
 
+        [NativeDisableParallelForRestriction] 
+        private NativeArray<int> __connectionOrders;
+
         [NativeDisableParallelForRestriction]
         private NativeArray<Channel> __channels;
         [NativeDisableParallelForRestriction]
         private NativeArray<UnsafeList<int>> __targets;
         [NativeDisableParallelForRestriction]
         private NativeArray<NetworkSendBuffer> __buffers;
-        private NativeList<int>.ParallelWriter __sendAllConnectionIndices;
-        private NativeParallelMultiHashMap<int, int>.ParallelWriter __sendChannelConnectionIndices;
-        private NativeParallelMultiHashMap<int, int>.ParallelWriter __sendIdentityConnectionIndices;
+        private NativeList<ConnectionOrder>.ParallelWriter __sendAllConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendChannelConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendIdentityConnectionOrders;
 
         public Concurrent(ref NetworkServerSendBuffer sendBuffer)
         {
             ChannelCount = sendBuffer.ChannelCount;
             __connectionIndices = sendBuffer.__connectionIndices;
+            __connectionOrders = sendBuffer.__connectionOrders;
             __payloads = sendBuffer.__payloads.AsDeferredJobArray();
             __channels = sendBuffer.__channels.AsDeferredJobArray();
             __targets = sendBuffer.__targets.AsDeferredJobArray();
             __buffers = sendBuffer.__buffers.AsDeferredJobArray();
-            __sendAllConnectionIndices = sendBuffer.__sendAllConnectionIndices.AsParallelWriter();
-            __sendChannelConnectionIndices = sendBuffer.__sendChannelConnectionIndices.AsParallelWriter();
-            __sendIdentityConnectionIndices = sendBuffer.__sendIdentityConnectionIndices.AsParallelWriter();
+            __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders.AsParallelWriter();
+            __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders.AsParallelWriter();
+            __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders.AsParallelWriter();
         }
 
         public NativeArray<byte> GetPayload(uint id)
@@ -208,26 +224,29 @@ public struct NetworkServerSendBuffer
 
         public void EndWrite(in DataStreamWriter writer)
         {
-            int value = (int)writer.m_SendHandleData;
+            ConnectionOrder connectionOrder;
+            connectionOrder.bufferIndex = (int)writer.m_SendHandleData;
 
-            var buffer = __buffers[value];
+            var buffer = __buffers[connectionOrder.bufferIndex];
             buffer.EndWrite(writer);
-            __buffers[value] = buffer;
+            __buffers[connectionOrder.bufferIndex] = buffer;
 
-            int target = GetBufferTarget(value, __GetChannelCount(), __connectionIndices.Count, out int connectionIndex);
-            var targets = __targets[connectionIndex];
+            int target = GetBufferTarget(connectionOrder.bufferIndex, __GetChannelCount(), __connectionIndices.Count, out connectionOrder.connectionIndex);
+            var targets = __targets[connectionOrder.connectionIndex];
             if(targets.IndexOf(target) == -1)
             {
                 targets.Add(target);
 
-                __targets[connectionIndex] = targets;
+                __targets[connectionOrder.connectionIndex] = targets;
+
+                connectionOrder.value = System.Threading.Interlocked.Increment(ref __connectionOrders.AsSpan()[0]);
 
                 if (target > 0)
-                    __sendIdentityConnectionIndices.Add(target - 1, connectionIndex);
+                    __sendIdentityConnectionOrders.Add(target - 1, connectionOrder);
                 else if (target < 0)
-                    __sendChannelConnectionIndices.Add(-target - 1, connectionIndex);
+                    __sendChannelConnectionOrders.Add(-target - 1, connectionOrder);
                 else
-                    __sendAllConnectionIndices.AddNoResize(connectionIndex);
+                    __sendAllConnectionOrders.AddNoResize(connectionOrder);
             }
         }
 
@@ -318,7 +337,7 @@ public struct NetworkServerSendBuffer
 
     public struct Sender
     {
-        public readonly int ChannelCount;
+        //public readonly int ChannelCount;
 
         [ReadOnly]
         private NativeHashMap<NetworkConnection, uint> __connectionIDs;
@@ -329,24 +348,24 @@ public struct NetworkServerSendBuffer
         [ReadOnly]
         private NativeArray<NetworkSendBuffer> __buffers;
         [ReadOnly]
-        private NativeList<int> __sendAllConnectionIndices;
+        private NativeList<ConnectionOrder> __sendAllConnectionOrders;
         [ReadOnly]
-        private NativeParallelMultiHashMap<int, int> __sendChannelConnectionIndices;
+        private NativeParallelMultiHashMap<int, ConnectionOrder> __sendChannelConnectionOrders;
         [ReadOnly]
-        private NativeParallelMultiHashMap<int, int> __sendIdentityConnectionIndices;
+        private NativeParallelMultiHashMap<int, ConnectionOrder> __sendIdentityConnectionOrders;
 
         private NativeArray<SendBuffer> __sendBuffers;
 
         public Sender(ref NetworkServerSendBuffer sendBuffer)
         {
-            ChannelCount = sendBuffer.ChannelCount;
+            //ChannelCount = sendBuffer.ChannelCount;
             __connectionIDs = sendBuffer.__connectionIDs;
             __connectionIndices = sendBuffer.__connectionIndices;
             __channels = sendBuffer.__channels.AsDeferredJobArray();
             __buffers = sendBuffer.__buffers.AsDeferredJobArray();
-            __sendAllConnectionIndices = sendBuffer.__sendAllConnectionIndices;
-            __sendChannelConnectionIndices = sendBuffer.__sendChannelConnectionIndices;
-            __sendIdentityConnectionIndices = sendBuffer.__sendIdentityConnectionIndices;
+            __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders;
+            __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders;
+            __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders;
             __sendBuffers = sendBuffer.__sendBuffers.AsDeferredJobArray();
         }
 
@@ -364,48 +383,68 @@ public struct NetworkServerSendBuffer
                 sendBuffer.index = 0;
             }
 
-            int channelCount = ChannelCount == 0 ? __channels.Length : 0, connectionCount = __connectionIDs.Count, index;
+            //int channelCount = ChannelCount == 0 ? __channels.Length : 0, connectionCount = __connectionIDs.Count, index;
             NetworkSendBuffer buffer;
-            foreach (int connectionIndexToSend in __sendIdentityConnectionIndices.GetValuesForKey(connectionIndex.value))
+            UnsafeList<ConnectionOrder> connectionOrders = default;
+            foreach (var connectionOrder in __sendIdentityConnectionOrders.GetValuesForKey(connectionIndex.value))
             {
-                buffer = __buffers[GetBufferIndex(GetTargetFromConnectionIndex(connectionIndex.value), channelCount, connectionIndexToSend, connectionCount)];
-
-                index = 0;
-                if (!buffer.Apply(connection, pipeline, ref driver, ref index))
-                    sendBuffer.value.Append(buffer, index);
+                if (!connectionOrders.IsCreated)
+                    connectionOrders = new UnsafeList<ConnectionOrder>(1, Allocator.Temp);
+                    
+                connectionOrders.Add(connectionOrder);
                 
                 __Log($"Send To {id}");
             }
 
             foreach (int channel in __channels[connectionIndex.channelIndex])
             {
-                foreach(int connectionIndexToSend in __sendChannelConnectionIndices.GetValuesForKey(channel))
+                foreach(var connectionOrder in __sendChannelConnectionOrders.GetValuesForKey(channel))
                 {
-                    if (connectionIndexToSend == connectionIndex.value)
+                    if (connectionOrder.connectionIndex == connectionIndex.value)
                         continue;
 
-                    buffer = __buffers[GetBufferIndex(GetTargetFromChannel(channel), channelCount, connectionIndexToSend, connectionCount)];
-
-                    index = 0;
-                    if (!buffer.Apply(connection, pipeline, ref driver, ref index))
-                        sendBuffer.value.Append(buffer, index);
+                    if (!connectionOrders.IsCreated)
+                        connectionOrders = new UnsafeList<ConnectionOrder>(1, Allocator.Temp);
                     
+                    connectionOrders.Add(connectionOrder);
+
                     __Log($"Send Channel {channel} : {id}");
                 }
             }
 
-            foreach (int connectionIndexToSend in __sendAllConnectionIndices)
+            foreach (var connectionOrder in __sendAllConnectionOrders)
             {
-                if (connectionIndexToSend == connectionIndex.value)
+                if (connectionOrder.connectionIndex == connectionIndex.value)
                     continue;
 
-                buffer = __buffers[GetBufferIndex(0, channelCount, connectionIndexToSend, connectionCount)];
+                if (!connectionOrders.IsCreated)
+                    connectionOrders = new UnsafeList<ConnectionOrder>(1, Allocator.Temp);
+                    
+                connectionOrders.Add(connectionOrder);
+
+                /*buffer = __buffers[GetBufferIndex(0, channelCount, connectionIndexToSend, connectionCount)];
 
                 index = 0;
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
-                    sendBuffer.value.Append(buffer, index);
+                    sendBuffer.value.Append(buffer, index);*/
 
                 __Log($"Send All {id}");
+            }
+
+            if (connectionOrders.IsCreated)
+            {
+                int index;
+                connectionOrders.Sort();
+                foreach (var connectionOrder in connectionOrders)
+                {
+                    buffer = __buffers[connectionOrder.bufferIndex];
+
+                    index = 0;
+                    if (!buffer.Apply(connection, pipeline, ref driver, ref index))
+                        sendBuffer.value.Append(buffer, index);
+                }
+                
+                connectionOrders.Dispose();
             }
 
             __sendBuffers[connectionIndex.value] = sendBuffer;
@@ -446,15 +485,16 @@ public struct NetworkServerSendBuffer
 
     private NativeHashMap<NetworkConnection, uint> __connectionIDs;
     private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
+    private NativeArray<int> __connectionOrders;
     private NativeList<NetworkConnection> __connections;
     private NativeList<byte> __payloads;
     private NativeList<Channel> __channels;
     private NativeList<SendBuffer> __sendBuffers;
     private NativeList<UnsafeList<int>> __targets;
     private NativeList<NetworkSendBuffer> __buffers;
-    private NativeList<int> __sendAllConnectionIndices;
-    private NativeParallelMultiHashMap<int, int> __sendChannelConnectionIndices;
-    private NativeParallelMultiHashMap<int, int> __sendIdentityConnectionIndices;
+    private NativeList<ConnectionOrder> __sendAllConnectionOrders;
+    private NativeParallelMultiHashMap<int, ConnectionOrder> __sendChannelConnectionOrders;
+    private NativeParallelMultiHashMap<int, ConnectionOrder> __sendIdentityConnectionOrders;
 
     public readonly int ChannelCount;
 
@@ -472,21 +512,23 @@ public struct NetworkServerSendBuffer
 
         __connectionIDs = new NativeHashMap<NetworkConnection, uint>(1, allocator);
         __connectionIndices = new NativeHashMap<uint, ConnectionIndex> (1, allocator);
+        __connectionOrders = CollectionHelper.CreateNativeArray<int>(1, allocator);
         __connections = new NativeList<NetworkConnection> (allocator);
         __payloads = new NativeList<byte> (allocator);
         __channels = new NativeList<Channel> (allocator);
         __sendBuffers = new NativeList<SendBuffer> (allocator);
         __targets = new NativeList<UnsafeList<int>> (allocator);
         __buffers = new NativeList<NetworkSendBuffer>(allocator);
-        __sendAllConnectionIndices = new NativeList<int>(allocator);
-        __sendChannelConnectionIndices = new NativeParallelMultiHashMap<int, int> (1, allocator);
-        __sendIdentityConnectionIndices = new NativeParallelMultiHashMap<int, int>(1, allocator);
+        __sendAllConnectionOrders = new NativeList<ConnectionOrder>(allocator);
+        __sendChannelConnectionOrders = new NativeParallelMultiHashMap<int, ConnectionOrder> (1, allocator);
+        __sendIdentityConnectionOrders = new NativeParallelMultiHashMap<int, ConnectionOrder>(1, allocator);
     }
 
     public void Dispose()
     {
         __connectionIDs.Dispose();
         __connectionIndices.Dispose();
+        __connectionOrders.Dispose();
         __connections.Dispose();
         __payloads.Dispose();
 
@@ -510,13 +552,15 @@ public struct NetworkServerSendBuffer
 
         __buffers.Dispose();
 
-        __sendAllConnectionIndices.Dispose();
-        __sendChannelConnectionIndices.Dispose();
-        __sendIdentityConnectionIndices.Dispose();
+        __sendAllConnectionOrders.Dispose();
+        __sendChannelConnectionOrders.Dispose();
+        __sendIdentityConnectionOrders.Dispose();
     }
 
     public void Clear()
     {
+        __connectionOrders[0] = 0;
+        
         int connectionCount = __connections.Length;
         for(int i = 0; i < connectionCount; ++i)
             __targets.ElementAt(i).Clear();
@@ -525,9 +569,9 @@ public struct NetworkServerSendBuffer
         for (int i = 0; i < bufferCount; ++i)
             __buffers.ElementAt(i).Clear();
 
-        __sendAllConnectionIndices.Clear();
-        __sendChannelConnectionIndices.Clear();
-        __sendIdentityConnectionIndices.Clear();
+        __sendAllConnectionOrders.Clear();
+        __sendChannelConnectionOrders.Clear();
+        __sendIdentityConnectionOrders.Clear();
     }
 
     public Concurrent AsConcurrent() => new Concurrent(ref this);
@@ -622,12 +666,12 @@ public struct NetworkServerSendBuffer
         for (int i = sourceBufferCount; i < destinationBufferCount; i++)
             __buffers.ElementAt(i).Clear();
 
-        __sendAllConnectionIndices.Capacity = math.max(__sendAllConnectionIndices.Capacity, connectionCount);
+        __sendAllConnectionOrders.Capacity = math.max(__sendAllConnectionOrders.Capacity, connectionCount);
 
-        __sendChannelConnectionIndices.Capacity =
-            math.max(__sendChannelConnectionIndices.Capacity, channelCount * connectionCount);
-        __sendIdentityConnectionIndices.Capacity =
-            math.max(__sendIdentityConnectionIndices.Capacity, connectionCount * connectionCount);
+        __sendChannelConnectionOrders.Capacity =
+            math.max(__sendChannelConnectionOrders.Capacity, channelCount * connectionCount);
+        __sendIdentityConnectionOrders.Capacity =
+            math.max(__sendIdentityConnectionOrders.Capacity, connectionCount * connectionCount);
 
         __Log($"Connect {id}");
         return id;

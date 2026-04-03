@@ -200,6 +200,7 @@ namespace ZG
             int type,
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
+            UnityEngine.Debug.Log($"[SendHeader]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
             if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
             {
                 __WriteHeader(sendBuffer.ID != ID, type, sendBuffer.GetPayload(ID), ref writer);
@@ -1107,7 +1108,7 @@ namespace ZG
                                     }
                                     else if (channel.Join(out _))
                                     {
-                                        if(!identity.Join(true, channelModifier.destination, ref sendBuffer))
+                                        if (!identity.Join(true, channelModifier.destination, ref sendBuffer))
                                             channel.Leave();
                                     }
 
@@ -1119,6 +1120,16 @@ namespace ZG
                                         channels.ElementAt(channelModifier.source).Leave();
                                     
                                     identities[identityIndex] = identity;
+
+                                    foreach (var channelID in channelIDs.GetValuesForKey(channelModifier.destination))
+                                    {
+                                        if (channelID == sendBuffer.ID)
+                                            continue;
+
+                                        identities[sendBuffer.GetChannelIndex(channelID)].SendHeader(
+                                            (int)NetworkRelayMessageType.Join,
+                                            ref sendBuffer);
+                                    }
                                 }
                                 else
                                     continue;

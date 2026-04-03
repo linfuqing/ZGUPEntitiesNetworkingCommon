@@ -277,8 +277,8 @@ namespace ZG
                     var streamCompressionModel = StreamCompressionModel.Default;
 
                     writer.WritePackedInt((int)NetworkRelayMessageType.Match, streamCompressionModel);
-                    writer.WritePackedInt(distance, streamCompressionModel);
                     writer.WritePackedInt(match, streamCompressionModel);
+                    writer.WritePackedInt(distance, streamCompressionModel);
                     sendBuffer.EndWrite(writer);
                 }
                 
@@ -529,9 +529,17 @@ namespace ZG
                         int source = identity.channel;
                         identity.SetStatus(reader.ReadPackedInt(streamCompressionModel), ref sendBuffer);
                         int destination = identity.channel;
-                        if(destination != source)
+                        if (destination != source)
+                        {
+                            if (source != NetworkRelayServerIdentity.CHANNEL_NULL)
+                                NetworkRelayServerChannel.ElementAt(ref channels, source).Leave();
+                            
+                            if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
+                                NetworkRelayServerChannel.ElementAt(ref channels, source).Join(out _);
+
                             __ModifyChannel(NetworkRelayServerChannelModifier.Type.Leave, source, destination,
                                 sendBuffer.ID, ref sendBuffer);
+                        }
 
                         identities[identityIndex] = identity;
                     }

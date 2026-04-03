@@ -34,9 +34,9 @@ namespace ZG
 
     public struct NetworkRelayServerMatch
     {
-        public NetworkRelayMatch value;
-
+        public int index;
         public double startTime;
+        public NetworkRelayMatch value;
     }
 
     public struct NetworkRelayServerChannel
@@ -268,9 +268,9 @@ namespace ZG
             return true;
         }
 
-        public bool Match(int distance, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool Match(int match, int distance, ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            if (match != 0)
+            if (this.match != 0)
             {
                 if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
                 {
@@ -282,7 +282,7 @@ namespace ZG
                     sendBuffer.EndWrite(writer);
                 }
                 
-                match = 0;
+                this.match = 0;
 
                 return true;
             }
@@ -674,8 +674,9 @@ namespace ZG
                         if (identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), ref sendBuffer))
                         {
                             NetworkRelayServerMatch match;
-                            match.value = new NetworkRelayMatch(ref reader, streamCompressionModel);
+                            match.index = identity.match;
                             match.startTime = time;
+                            match.value = new NetworkRelayMatch(ref reader, streamCompressionModel);
                             matches[identityIndex] = match;
 
                             int channel = identity.channel;
@@ -943,10 +944,23 @@ namespace ZG
 
             public void Execute()
             {
+                int numChannelModifiers = this.channelModifiers.Count;
+                if (numChannelModifiers < 1)
+                    return;
+                
+                int index = 0;
+                NetworkRelayServerChannelModifier channelModifier;
+                var channelModifiers =
+                    new NativeArray<NetworkRelayServerChannelModifier>(numChannelModifiers, Allocator.Temp);
+                while (this.channelModifiers.TryDequeue(out channelModifier))
+                    channelModifiers[index++] = channelModifier;
+                
+                bool isContains;
                 uint id;
                 UnsafeHashMap<int, int> matches = default;
-                while(channelModifiers.TryDequeue(out var channelModifier))
+                for(int i = 0; i < numChannelModifiers; ++i)
                 {
+                    channelModifier = channelModifiers[i];
                     switch(channelModifier.type)
                     {
                         case NetworkRelayServerChannelModifier.Type.Drop:
@@ -1012,6 +1026,8 @@ namespace ZG
                         case NetworkRelayServerChannelModifier.Type.Match:
                         case NetworkRelayServerChannelModifier.Type.Mismatch:
                         {
+                            int matchIndex = matchIDs.IndexOf(channelModifier.id);
+                            
                             if (!matches.IsCreated)
                                 matches = new UnsafeHashMap<int, int>(1, Allocator.Temp);
 
@@ -1020,13 +1036,39 @@ namespace ZG
                                 if(match != channelModifier.destination)
                                     continue;
                             }
+                            else if(matchIndex == -1)
+                                continue;
                             else
+                            {
+                                isContains = false;
+                                NetworkRelayServerChannelModifier temp;
+                                for (int j = i + 1; j < numChannelModifiers; ++j)
+                                {
+                                    temp = channelModifiers[j];
+                                    switch (temp.type)
+                                    {
+                                        case NetworkRelayServerChannelModifier.Type.Match:
+                                        case NetworkRelayServerChannelModifier.Type.Mismatch:
+                                            if (temp.id == channelModifier.id &&
+                                                matches.TryGetValue(channelModifier.destination, out match) &&
+                                                match != channelModifier.destination)
+                                                isContains = true;
+                                            break;
+                                    }
+
+                                    if (isContains)
+                                        break;
+                                }
+                                
+                                if(isContains)
+                                    continue;
+                                
                                 matches.Add(channelModifier.destination, channelModifier.destination);
-                            
+                            }
+
                             int identityIndex = this.sendBuffer.GetChannelIndex(channelModifier.id);
                             var identity = identities[identityIndex];
 
-                            int matchIndex = matchIDs.IndexOf(channelModifier.id);
                             if (matchIndex != -1)
                             {
                                 matchIDs.RemoveAtSwapBack(matchIndex);
@@ -1049,7 +1091,8 @@ namespace ZG
                                 new NetworkServerSendBuffer.Identity(channelModifier.id, ref this.sendBuffer);
                             if (NetworkRelayServerChannelModifier.Type.Match == channelModifier.type)
                             {
-                                if (identity.Match(this.matches[channelModifier.destination].value.distance, ref sendBuffer))
+                                var temp = this.matches[channelModifier.destination];
+                                if (identity.Match(temp.index, temp.value.distance, ref sendBuffer))
                                 {
                                     channelModifier.source = identity.channel;
 
@@ -1112,6 +1155,8 @@ namespace ZG
 
                 if (matches.IsCreated)
                     matches.Dispose();
+
+                channelModifiers.Dispose();
                 
 #if DEBUG
                 foreach (var pair in channelIDs)
@@ -1122,7 +1167,6 @@ namespace ZG
                     UnityEngine.Assertions.Assert.AreEqual(channelIDs.CountValuesForKey(pair.Key), channels[pair.Key].count);
                 }
 
-                bool isContains;
                 foreach (var identity in identities)
                 {
                     if (identity.channel != NetworkRelayServerIdentity.CHANNEL_NULL)

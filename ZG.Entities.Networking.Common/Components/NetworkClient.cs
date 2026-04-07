@@ -35,6 +35,8 @@ namespace ZG
 
         public struct ParallelWriter
         {
+            private NativeParallelHashSet<int>.ParallelWriter __bufferIndices;
+
             [NativeDisableParallelForRestriction]
             private NativeArray<Buffer> __buffers;
 
@@ -43,6 +45,8 @@ namespace ZG
 
             public ParallelWriter(ref NetworkClientSendBuffer buffer)
             {
+                __bufferIndices = buffer.__bufferIndices.AsParallelWriter();
+
                 __buffers = buffer.__buffers.AsDeferredJobArray();
 
                 _threadIndex = 0;
@@ -54,10 +58,12 @@ namespace ZG
                 var buffer = __buffers[bufferIndex];
                 
                 bool result = buffer.value.BeginWrite(out writer, capacity);
+                if (result)
+                {
+                    writer.m_SendHandleData = (IntPtr)bufferIndex;
 
-                writer.m_SendHandleData = (IntPtr)bufferIndex;
-
-                __buffers[bufferIndex] = buffer;
+                    __buffers[bufferIndex] = buffer;
+                }
 
                 return result;
             }
@@ -68,13 +74,16 @@ namespace ZG
                 var buffer = __buffers[bufferIndex];
                 buffer.value.EndWrite(writer);
                 __buffers[bufferIndex] = buffer;
+
+                __bufferIndices.Add(bufferIndex);
             }
 
         }
-        
+
         [ReadOnly]
         private NativeList<NetworkPipeline> __pipelines;
         private NativeList<Buffer> __buffers;
+        private NativeParallelHashSet<int> __bufferIndices;
         
         public bool isCreated => __buffers.IsCreated;
         
@@ -85,6 +94,8 @@ namespace ZG
             __pipelines = new NativeList<NetworkPipeline>(allocator);
 
             __buffers = new NativeList<Buffer>(allocator);
+
+            __bufferIndices = new NativeParallelHashSet<int>(1, allocator);
         }
 
         public void Dispose()
@@ -95,6 +106,7 @@ namespace ZG
                 buffer.value.Dispose();
             
             __buffers.Dispose();
+            __bufferIndices.Dispose();
         }
 
         public void Clear()
@@ -108,6 +120,7 @@ namespace ZG
 
                 __buffers[i] = buffer;
             }
+            __bufferIndices.Clear();
         }
 
         public ParallelWriter AsParallelWriter()
@@ -133,6 +146,8 @@ namespace ZG
                 buffer.value = new NetworkSendBuffer(allocator);
                 __buffers.Add(buffer);
             }
+            
+            __bufferIndices.Capacity = math.max(__bufferIndices.Capacity, __pipelines.Length * JobsUtility.MaxJobThreadCount);
             return result;
         }
 
@@ -154,11 +169,10 @@ namespace ZG
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
         {
-            int length = __buffers.Length;
-            for (int i = 0; i < length; ++i)
+            foreach (var bufferIndex in __bufferIndices)
             {
-                ref var buffer = ref __buffers.ElementAt(i);
-                buffer.value.Apply(connection, __pipelines[i / JobsUtility.MaxJobThreadCount], ref driver, ref buffer.index);
+                ref var buffer = ref __buffers.ElementAt(bufferIndex);
+                buffer.value.Apply(connection, __pipelines[bufferIndex / JobsUtility.MaxJobThreadCount], ref driver, ref buffer.index);
             }
         }
     }

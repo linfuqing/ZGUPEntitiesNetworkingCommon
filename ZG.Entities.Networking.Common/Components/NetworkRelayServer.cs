@@ -200,7 +200,7 @@ namespace ZG
             int type,
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            UnityEngine.Debug.Log($"[SendHeader]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
+            //UnityEngine.Debug.Log($"[SendHeader]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
             if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
             {
                 __WriteHeader(sendBuffer.ID != ID, type, sendBuffer.GetPayload(ID), ref writer);
@@ -674,6 +674,8 @@ namespace ZG
                         var identity = identities[identityIndex];
                         if (identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), ref sendBuffer))
                         {
+                            //UnityEngine.Debug.Log("Matching ID: " + identity.ID);
+                            
                             NetworkRelayServerMatch match;
                             match.index = identity.match;
                             match.startTime = time;

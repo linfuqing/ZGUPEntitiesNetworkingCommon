@@ -157,14 +157,18 @@ namespace ZG
             
             bool result = __buffers.ElementAt(bufferIndex).value.BeginWrite(out writer, capacity);
 
-            writer.m_SendHandleData = (IntPtr)bufferIndex;
+            if(result)
+                writer.m_SendHandleData = (IntPtr)bufferIndex;
 
             return result;
         }
 
         public void EndWrite(in DataStreamWriter writer)
         {
-            __buffers.ElementAt((int)writer.m_SendHandleData).value.EndWrite(writer);
+            int bufferIndex = (int)writer.m_SendHandleData;
+            __buffers.ElementAt(bufferIndex).value.EndWrite(writer);
+            
+            __bufferIndices.Add(bufferIndex);
         }
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
@@ -174,6 +178,8 @@ namespace ZG
                 ref var buffer = ref __buffers.ElementAt(bufferIndex);
                 buffer.value.Apply(connection, __pipelines[bufferIndex / JobsUtility.MaxJobThreadCount], ref driver, ref buffer.index);
             }
+            
+            __bufferIndices.Clear();
         }
     }
     

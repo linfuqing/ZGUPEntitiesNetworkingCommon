@@ -201,9 +201,12 @@ namespace ZG
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
             //UnityEngine.Debug.Log($"[SendHeader]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
-            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
+            bool isSendOthers = sendBuffer.ID != ID;
+            var payload = sendBuffer.GetPayload(ID);
+            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer,
+                    (ushort)((isSendOthers ? payload.Length : 0) + 3 * UnsafeUtility.SizeOf<int>())))
             {
-                __WriteHeader(sendBuffer.ID != ID, type, sendBuffer.GetPayload(ID), ref writer);
+                __WriteHeader(isSendOthers, type, payload, ref writer);
 
                 sendBuffer.EndWrite(writer);
             }
@@ -273,7 +276,7 @@ namespace ZG
         {
             if (this.match != 0)
             {
-                if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
+                if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
                 {
                     var streamCompressionModel = StreamCompressionModel.Default;
 
@@ -311,19 +314,20 @@ namespace ZG
             ref DataStreamReader reader,
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
+            ushort capacity = (ushort)(reader.Length - reader.GetBytesRead() + 3 * UnsafeUtility.SizeOf<int>());
             DataStreamWriter writer;
             switch(relayType)
             {
                 case NetworkRelayType.All:
-                    if (!sendBuffer.BeginWrite(out writer))
+                    if (!sendBuffer.BeginWrite(out writer, capacity))
                         return;
                     break;
                 case NetworkRelayType.Channel:
-                    if (channel == CHANNEL_NULL || !sendBuffer.BeginWrite(channel, out writer))
+                    if (channel == CHANNEL_NULL || !sendBuffer.BeginWrite(channel, out writer, capacity))
                         return;
                     break;
                 default:
-                    if (!sendBuffer.BeginWrite(relayType.RelayID(), out writer))
+                    if (!sendBuffer.BeginWrite(relayType.RelayID(), out writer, capacity))
                         return;
                     break;
             }
@@ -395,7 +399,7 @@ namespace ZG
             var streamCompressionModel = StreamCompressionModel.Default;
 
             var channel = this.channel;
-            if (channel != CHANNEL_NULL && sendBuffer.BeginWrite(channel, out var writer))
+            if (channel != CHANNEL_NULL && sendBuffer.BeginWrite(channel, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
             {
                 writer.WritePackedInt(type, streamCompressionModel);
                 writer.WritePackedInt(match, streamCompressionModel);
@@ -403,7 +407,7 @@ namespace ZG
                 sendBuffer.EndWrite(writer);
             }
 
-            if (sendBuffer.BeginWrite(sendBuffer.ID, out writer))
+            if (sendBuffer.BeginWrite(sendBuffer.ID, out writer, (ushort)(2 * UnsafeUtility.SizeOf<int>())))
             {
                 writer.WritePackedInt(type, streamCompressionModel);
                 writer.WritePackedInt(match, streamCompressionModel);
@@ -624,7 +628,7 @@ namespace ZG
 
                         if (!result)
                         {
-                            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer))
+                            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer, (ushort)(2 * UnsafeUtility.SizeOf<int>())))
                             {
                                 writer.WritePackedInt((int)NetworkRelayMessageType.JoinFailed, streamCompressionModel);
                                 writer.WritePackedInt(targetChannelIndex, streamCompressionModel);

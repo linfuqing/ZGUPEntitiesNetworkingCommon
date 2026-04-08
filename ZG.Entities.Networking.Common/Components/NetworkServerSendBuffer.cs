@@ -129,6 +129,8 @@ public struct NetworkServerSendBuffer
         [ReadOnly]
         private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
         [ReadOnly]
+        private NativeList<NetworkConnection> __connections;
+        [ReadOnly]
         private NativeArray<byte> __payloads;
 
         [NativeDisableParallelForRestriction] 
@@ -147,6 +149,7 @@ public struct NetworkServerSendBuffer
         public Concurrent(ref NetworkServerSendBuffer sendBuffer)
         {
             ChannelCount = sendBuffer.ChannelCount;
+            __connections = sendBuffer.__connections;
             __connectionIndices = sendBuffer.__connectionIndices;
             __connectionOrders = sendBuffer.__connectionOrders;
             __payloads = sendBuffer.__payloads.AsDeferredJobArray();
@@ -231,7 +234,8 @@ public struct NetworkServerSendBuffer
             buffer.EndWrite(writer);
             __buffers[connectionOrder.bufferIndex] = buffer;
 
-            int target = GetBufferTarget(connectionOrder.bufferIndex, __GetChannelCount(), __connectionIndices.Count, out connectionOrder.connectionIndex);
+            int target = GetBufferTarget(connectionOrder.bufferIndex, __GetChannelCount(), __connections.Length,
+                out connectionOrder.connectionIndex);
             var targets = __targets[connectionOrder.connectionIndex];
             if(targets.IndexOf(target) == -1)
             {
@@ -258,7 +262,11 @@ public struct NetworkServerSendBuffer
                 return false;
             }
 
-            int bufferIndex = GetBufferIndex(target, __GetChannelCount(), connectionIndex.value, __connectionIndices.Count);
+            int bufferIndex = GetBufferIndex(target, __GetChannelCount(), connectionIndex.value, __connections.Length);
+
+            if (bufferIndex < 0 || bufferIndex >= __buffers.Length)
+                UnityEngine.Debug.LogError(
+                    $"Buffer index {bufferIndex} is out of range {__buffers.Length}.(target:{target},channelCount:{__GetChannelCount()},connectionIndex:{connectionIndex.value},channelIndex:{connectionIndex.value},connectionCount:{__connectionIndices.Count})");
 
             var buffer = __buffers[bufferIndex];
 
@@ -272,7 +280,7 @@ public struct NetworkServerSendBuffer
             return true;
         }
 
-        private int __GetChannelCount() => ChannelCount == 0 ? __channels.Length : 0;
+        private int __GetChannelCount() => ChannelCount == 0 ? __channels.Length : ChannelCount;
     }
 
     public struct Identity
@@ -344,9 +352,9 @@ public struct NetworkServerSendBuffer
         [ReadOnly]
         private NativeHashMap<uint, ConnectionIndex> __connectionIndices;
         [ReadOnly]
-        private NativeArray<Channel> __channels;
+        private NativeList<Channel> __channels;
         [ReadOnly]
-        private NativeArray<NetworkSendBuffer> __buffers;
+        private NativeList<NetworkSendBuffer> __buffers;
         [ReadOnly]
         private NativeList<ConnectionOrder> __sendAllConnectionOrders;
         [ReadOnly]
@@ -361,8 +369,8 @@ public struct NetworkServerSendBuffer
             //ChannelCount = sendBuffer.ChannelCount;
             __connectionIDs = sendBuffer.__connectionIDs;
             __connectionIndices = sendBuffer.__connectionIndices;
-            __channels = sendBuffer.__channels.AsDeferredJobArray();
-            __buffers = sendBuffer.__buffers.AsDeferredJobArray();
+            __channels = sendBuffer.__channels;
+            __buffers = sendBuffer.__buffers;
             __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders;
             __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders;
             __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders;
@@ -393,7 +401,7 @@ public struct NetworkServerSendBuffer
                     
                 connectionOrders.Add(connectionOrder);
                 
-                __Log($"Send To {id}");
+                //__Log($"Send To {id}");
             }
 
             foreach (int channel in __channels[connectionIndex.channelIndex])
@@ -408,7 +416,7 @@ public struct NetworkServerSendBuffer
                     
                     connectionOrders.Add(connectionOrder);
 
-                    __Log($"Send Channel {channel} : {id}");
+                    //__Log($"Send Channel {channel} : {id}");
                 }
             }
 
@@ -428,7 +436,7 @@ public struct NetworkServerSendBuffer
                 if (!buffer.Apply(connection, pipeline, ref driver, ref index))
                     sendBuffer.value.Append(buffer, index);*/
 
-                __Log($"Send All {id}");
+                //__Log($"Send All {id}");
             }
 
             if (connectionOrders.IsCreated)
@@ -498,7 +506,7 @@ public struct NetworkServerSendBuffer
 
     public readonly int ChannelCount;
 
-    public int channelCount => ChannelCount == 0 ? __channels.Length : 0;
+    public int channelCount => ChannelCount == 0 ? __channels.Length : ChannelCount;
 
     public unsafe AllocatorManager.AllocatorHandle allocator => __connections.GetUnsafeList()->Allocator;
 
@@ -597,7 +605,7 @@ public struct NetworkServerSendBuffer
 
             if (connectionIndex.payloadSize != payload.Length)
             {
-                UnityEngine.Debug.LogError($"payload size mismatch: {connectionIndex.payloadSize} != {payload.Length}");
+                UnityEngine.Debug.LogError($"Payload size mismatch: {connectionIndex.payloadSize} != {payload.Length}");
 
                 return 0;
             }
@@ -610,6 +618,8 @@ public struct NetworkServerSendBuffer
         }
         else
         {
+            UnityEngine.Assertions.Assert.AreEqual(__connectionIndices.Count, __channels.Length);
+
             connectionIndex.channelIndex = __channels.Length;
 
             __channels.Add(new Channel(allocator));
@@ -629,12 +639,15 @@ public struct NetworkServerSendBuffer
         __connectionIDs.Add(connection, id);
 
         int connectionCount = __connections.Length;
+        UnityEngine.Assertions.Assert.AreEqual(connectionCount, __connectionIDs.Count);
         if (__sendBuffers.Length < connectionCount)
         {
             SendBuffer sendBuffer;
             sendBuffer.index = 0;
             sendBuffer.value = new NetworkSendBuffer(allocator);
             __sendBuffers.Add(sendBuffer);
+
+            UnityEngine.Assertions.Assert.AreEqual(connectionCount, __sendBuffers.Length);
         }
         else
         {
@@ -644,7 +657,11 @@ public struct NetworkServerSendBuffer
         }
 
         if (__targets.Length < connectionCount)
+        {
             __targets.Add(new UnsafeList<int>(1, allocator));
+            
+            UnityEngine.Assertions.Assert.AreEqual(connectionCount, __targets.Length);
+        }
         else
             __targets.ElementAt(connectionIndex.value).Clear();
 
@@ -655,7 +672,7 @@ public struct NetworkServerSendBuffer
         {
             __buffers.ResizeUninitialized(destinationBufferCount);
 
-            for(int i = sourceBufferCount; i < destinationBufferCount; i++)
+            for(int i = sourceBufferCount; i < destinationBufferCount; ++i)
                 __buffers.ElementAt(i) = new NetworkSendBuffer(allocator);
         }
 
@@ -663,7 +680,7 @@ public struct NetworkServerSendBuffer
         sourceBufferCount =
             GetBufferCountPerConnection(ChannelCount == 0 ? connectionIndex.channelIndex : ChannelCount,
                 connectionIndex.value) * connectionIndex.value;
-        for (int i = sourceBufferCount; i < destinationBufferCount; i++)
+        for (int i = sourceBufferCount; i < destinationBufferCount; ++i)
             __buffers.ElementAt(i).Clear();
 
         __sendAllConnectionOrders.Capacity = math.max(__sendAllConnectionOrders.Capacity, connectionCount);
@@ -673,7 +690,7 @@ public struct NetworkServerSendBuffer
         __sendIdentityConnectionOrders.Capacity =
             math.max(__sendIdentityConnectionOrders.Capacity, connectionCount * connectionCount);
 
-        __Log($"Connect {id}");
+        __Log($"Connect {id}, payload size {payload.Length}");
         return id;
     }
 

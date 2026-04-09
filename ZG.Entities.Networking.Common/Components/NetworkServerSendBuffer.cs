@@ -690,7 +690,8 @@ public struct NetworkServerSendBuffer
         __sendIdentityConnectionOrders.Capacity =
             math.max(__sendIdentityConnectionOrders.Capacity, connectionCount * connectionCount);
 
-        __Log($"Connect {id}, payload size {payload.Length}");
+        __Log(
+            $"Connect {id}(index {connectionIndex.value}, channel {connectionIndex.channelIndex}, payload size {payload.Length})");
         return id;
     }
 
@@ -701,8 +702,12 @@ public struct NetworkServerSendBuffer
 
         __connectionIDs.Remove(connection);
 
+        var connectionIndex = __connectionIndices[id];
+        
+        __connections.RemoveAt(connectionIndex.value);
+
         uint tempID;
-        ConnectionIndex connectionIndex = __connectionIndices[id], tempConnectionIndex;
+        ConnectionIndex tempConnectionIndex;
         foreach(var pair in __connectionIDs)
         {
             tempID = pair.Value;
@@ -710,14 +715,14 @@ public struct NetworkServerSendBuffer
             if (tempConnectionIndex.value > connectionIndex.value)
             {
                 --tempConnectionIndex.value;
+                
+                UnityEngine.Assertions.Assert.AreEqual(tempID, __connectionIDs[__connections[tempConnectionIndex.value]]);
 
                 __connectionIndices[tempID] = tempConnectionIndex;
             }
         }
         
         //__sendBuffers.ElementAt(connectionIndex.value).Clear();
-
-        __connections.RemoveAt(connectionIndex.value);
 
         connectionIndex.value = -1;
         __connectionIndices[id] = connectionIndex;

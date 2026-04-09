@@ -10,6 +10,8 @@ namespace ZG
         Connect, 
         Disconnect,
         Status,
+        Add, 
+        Remove, 
         Create,
         Join,
         JoinFailed, 

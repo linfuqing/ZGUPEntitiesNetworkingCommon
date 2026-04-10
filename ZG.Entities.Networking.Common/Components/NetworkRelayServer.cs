@@ -189,7 +189,7 @@ namespace ZG
                 {
                     uint id = reader.ReadPackedUInt(streamCompressionModel);
                     int channelIndex = id == sendBuffer.ID ? sendBuffer.GetChannelIndex(id) : -1;
-                    if (id != sendBuffer.ID && sendBuffer.GetChannelIndex(id) != -1)
+                    if (channelIndex != -1)
                     {
                         var identityIndex = sendBuffer.channelIndex;
                         var identity = identities[identityIndex];

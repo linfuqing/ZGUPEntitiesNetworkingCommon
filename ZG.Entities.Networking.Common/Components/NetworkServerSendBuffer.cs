@@ -168,9 +168,13 @@ public struct NetworkServerSendBuffer
             return __payloads.GetSubArray(connectionIndex.payloadOffset, connectionIndex.payloadSize);
         }
 
-        public int GetConnectionIndex(uint id) => __connectionIndices[id].value;
+        public int GetConnectionIndex(uint id) => __connectionIndices.TryGetValue(id, out var connectionIndex)
+            ? connectionIndex.value
+            : -1;
 
-        public int GetChannelIndex(uint id) => __connectionIndices[id].channelIndex;
+        public int GetChannelIndex(uint id) => __connectionIndices.TryGetValue(id, out var connectionIndex)
+            ? connectionIndex.channelIndex
+            : -1;
 
         public bool AddChannel(uint id, int value)
         {

@@ -206,7 +206,7 @@ namespace ZG
                 case NetworkRelayMessageType.Remove:
                 {
                     uint id = reader.ReadPackedUInt(streamCompressionModel);
-                    int channelIndex = id == sendBuffer.ID ? sendBuffer.GetChannelIndex(id) : -1;
+                    int channelIndex = id == sendBuffer.ID ? -1 : sendBuffer.GetChannelIndex(id);
                     if (channelIndex != -1)
                     {
                         var identityIndex = sendBuffer.channelIndex;

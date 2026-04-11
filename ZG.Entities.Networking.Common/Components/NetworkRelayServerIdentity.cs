@@ -369,26 +369,19 @@ namespace ZG
             return true;
         }
 
-        public bool Match(int match, int distance, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public void Match(int match, int distance, ref NetworkServerSendBuffer.Identity sendBuffer)
         {
-            if (this.match != 0)
+            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
             {
-                if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
-                {
-                    var streamCompressionModel = StreamCompressionModel.Default;
+                var streamCompressionModel = StreamCompressionModel.Default;
 
-                    writer.WritePackedInt((int)NetworkRelayMessageType.Match, streamCompressionModel);
-                    writer.WritePackedInt(match, streamCompressionModel);
-                    writer.WritePackedInt(distance, streamCompressionModel);
-                    sendBuffer.EndWrite(writer);
-                }
-                
-                this.match = 0;
-
-                return true;
+                writer.WritePackedInt((int)NetworkRelayMessageType.Match, streamCompressionModel);
+                writer.WritePackedInt(match, streamCompressionModel);
+                writer.WritePackedInt(distance, streamCompressionModel);
+                sendBuffer.EndWrite(writer);
             }
-
-            return false;
+            
+            this.match = 0;
         }
         
         public bool Mismatch(ref NetworkServerSendBuffer.Identity sendBuffer)

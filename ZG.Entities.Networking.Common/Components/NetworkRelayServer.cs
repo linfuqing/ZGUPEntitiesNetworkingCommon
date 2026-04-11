@@ -529,7 +529,7 @@ namespace ZG
                 {
                     foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
                     {
-                        if (distanceID == id || !__CanMatch(true, distanceID, out _, out channel))
+                        if (/*distanceID == id || */!__CanMatch(true, distanceID, out _, out channel))
                             continue;
 
                         channelPlayerCount = 0;
@@ -542,7 +542,11 @@ namespace ZG
                                 break;
                         }
 
-                        playerCount += channelPlayerCount > 0 ? channelPlayerCount : 1;
+                        if (channelPlayerCount > 0)
+                            playerCount += channelPlayerCount;
+                        else if(distanceID != id)
+                            ++playerCount;
+                        
                         if (playerCount >= match.value.playerCount)
                             break;
                     }
@@ -569,36 +573,51 @@ namespace ZG
                 {
                     foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
                     {
-                        if (distanceID == id || !__CanMatch(true, distanceID, out _, out channel))
+                        if (/*distanceID == id || */!__CanMatch(true, distanceID, out _, out channel))
                             continue;
 
                         channelPlayerCount = 0;
                         foreach (uint channelID in channelIDs.GetValuesForKey(channel))
                         {
-                            if (channelID == id || __CanMatch(false, channelID, out _, out drop.source))
-                            {
-                                modifier.id = channelID;
-                                modifiers.Enqueue(modifier);
-                                
-                                if (++channelPlayerCount + playerCount >= match.value.playerCount)
-                                    break;
-                            }
-                            else
-                            {
-                                drop.id = channelID;
-                                modifiers.Enqueue(drop);
-                            }
+                            if (channelID == id || !__CanMatch(false, channelID, out _, out _))
+                                continue;
+
+                            ++channelPlayerCount;
+                            break;
                         }
 
-                        if (channelPlayerCount == 0)
+                        if (channelPlayerCount > 0)
+                        {
+                            channelPlayerCount = 0;
+                            foreach (uint channelID in channelIDs.GetValuesForKey(channel))
+                            {
+                                if(channelID == id)
+                                    continue;
+                                
+                                if (__CanMatch(false, channelID, out _, out drop.source) && 
+                                    channelPlayerCount + playerCount < match.value.playerCount)
+                                {
+                                    modifier.id = channelID;
+                                    modifiers.Enqueue(modifier);
+
+                                    ++channelPlayerCount;
+                                }
+                                else
+                                {
+                                    drop.id = channelID;
+                                    modifiers.Enqueue(drop);
+                                }
+                            }
+                            
+                            playerCount += channelPlayerCount;
+                        }
+                        else if (distanceID != id)
                         {
                             modifier.id = distanceID;
                             modifiers.Enqueue(modifier);
 
                             ++playerCount;
                         }
-                        else
-                            playerCount += channelPlayerCount;
                         
                         if (playerCount >= match.value.playerCount)
                             break;

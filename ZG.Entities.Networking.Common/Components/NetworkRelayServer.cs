@@ -840,6 +840,8 @@ namespace ZG
                             if (NetworkRelayServerModifier.Type.Match == modifier.type)
                             {
                                 var temp = this.matches[modifier.destination];
+                                identity.Match(temp.index, temp.value.distance, ref sendBuffer);
+
                                 modifier.source = identity.channel;
 
                                 ref var channel = ref channels.ElementAt(modifier.destination);
@@ -864,15 +866,11 @@ namespace ZG
                                         channel.Leave();
                                 }
 
-                                identity.Match(temp.index, temp.value.distance, ref sendBuffer);
-
                                 identities[identityIndex] = identity;
 
                                 modifier.destination = identity.channel;
                                 if (modifier.destination == modifier.source)
-                                {
                                     continue;
-                                }
 
                                 if (modifier.source != NetworkRelayServerIdentity.CHANNEL_NULL)
                                     channels.ElementAt(modifier.source).Leave();

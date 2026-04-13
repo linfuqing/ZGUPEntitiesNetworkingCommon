@@ -144,7 +144,7 @@ namespace ZG
             foreach (var friendID in __friendIDs)
             {
                 identity = identities[sendBuffer.GetChannelIndex(friendID)];
-                if (identity.channel != channel)
+                if (CHANNEL_NULL == channel || identity.channel != channel)
                 {
                     if (sendBuffer.BeginWrite(friendID, out writer))
                     {
@@ -180,7 +180,7 @@ namespace ZG
             
             foreach (var friendID in __friendIDs)
             {
-                if(identities[sendBuffer.GetChannelIndex(friendID)].channel == channel)
+                if(CHANNEL_NULL != channel && identities[sendBuffer.GetChannelIndex(friendID)].channel == channel)
                     continue;
 
                 if (sendBuffer.BeginWrite(friendID, out var writer))

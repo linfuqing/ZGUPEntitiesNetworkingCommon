@@ -254,37 +254,40 @@ namespace ZG
                     int targetChannelIndex = reader.ReadPackedInt(streamCompressionModel);
                     if (targetChannelIndex >= 0 && targetChannelIndex < channels.Length)
                     {
-                        var identityIndex = sendBuffer.channelIndex;
-                        var identity = identities[identityIndex];
-                        int channelIndex = identity.channel;
-                        bool isCreator = (identity.channelFlag &
-                                          NetworkRelayChannelFlag.Creator) == NetworkRelayChannelFlag.Creator,
-                            result = false;
-                        ref var channel = ref NetworkRelayServerChannel
-                            .ElementAt(ref channels, targetChannelIndex);
-                        if (channel.Join(out _))
+                        bool result = false;
+                        if (channelIDs.ContainsKey(targetChannelIndex))
                         {
-                            if (identity.Join(
-                                    false,
-                                    targetChannelIndex,
-                                    identities, 
-                                    channelIDs, 
-                                    ref sendBuffer))
+                            var identityIndex = sendBuffer.channelIndex;
+                            var identity = identities[identityIndex];
+                            int channelIndex = identity.channel;
+                            bool isCreator = (identity.channelFlag &
+                                              NetworkRelayChannelFlag.Creator) == NetworkRelayChannelFlag.Creator;
+                            ref var channel = ref NetworkRelayServerChannel
+                                .ElementAt(ref channels, targetChannelIndex);
+                            if (channel.Join(out _))
                             {
-                                //__SendChannelJoins(targetChannelIndex, ref sendBuffer);
+                                if (identity.Join(
+                                        false,
+                                        targetChannelIndex,
+                                        identities,
+                                        channelIDs,
+                                        ref sendBuffer))
+                                {
+                                    //__SendChannelJoins(targetChannelIndex, ref sendBuffer);
 
-                                __Modify(NetworkRelayServerModifier.Type.Join, channelIndex,
-                                    targetChannelIndex,
-                                    sendBuffer.ID, ref sendBuffer);
+                                    __Modify(NetworkRelayServerModifier.Type.Join, channelIndex,
+                                        targetChannelIndex,
+                                        sendBuffer.ID, ref sendBuffer);
 
-                                result = true;
+                                    result = true;
+                                }
+                                else
+                                    channel.Leave();
                             }
-                            else
-                                channel.Leave();
-                        }
 
-                        if (__CreateOrJoin(result, isCreator, channelIndex, identity.channel, ref sendBuffer))
-                            identities[identityIndex] = identity;
+                            if (__CreateOrJoin(result, isCreator, channelIndex, identity.channel, ref sendBuffer))
+                                identities[identityIndex] = identity;
+                        }
 
                         if (!result)
                         {
@@ -648,7 +651,7 @@ namespace ZG
         [BurstCompile]
         private struct ModifyChannels : IJob
         {
-            public NetworkServerSendBuffer.Concurrent sendBuffer;
+            public NetworkServerSendBuffer.ParallelWriter sendBuffer;
 
             public NativeQueue<NetworkRelayServerModifier> modifiers;
             public NativeParallelMultiHashMap<int, uint> channelIDs;
@@ -996,7 +999,7 @@ namespace ZG
                 ModifyChannels modifyChannels;
                 modifyChannels.channelIDs = channelIDs;
                 modifyChannels.modifiers = modifiers;
-                modifyChannels.sendBuffer = sendBuffer.AsConcurrent();
+                modifyChannels.sendBuffer = sendBuffer.AsParallelWriter();
                 modifyChannels.identities = identities;
                 modifyChannels.channels = channels;
                 modifyChannels.matches = matches;

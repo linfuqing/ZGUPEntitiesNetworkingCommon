@@ -118,7 +118,7 @@ namespace ZG
     {
         public T handler;
         public NetworkDriver.Concurrent driver;
-        public NetworkServerSendBuffer.Concurrent sendBuffer;
+        public NetworkServerSendBuffer.ParallelWriter sendBuffer;
 
         public NativeList<NetworkConnection>.ParallelWriter connectionsToDisconnect;
 
@@ -285,7 +285,7 @@ namespace ZG
             
             var jobHandle = __driver.ScheduleUpdate(inputDeps);
 
-            var sendBufferConcurrent = sendBuffer.AsConcurrent();
+            var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
 
             NetworkServerInitJob<TListener> init;
             init.listener = listener;
@@ -301,7 +301,7 @@ namespace ZG
             NetworkServerPopEventsJob<THandler> popEvents;
             popEvents.handler = handler;
             popEvents.driver = driver;
-            popEvents.sendBuffer = sendBufferConcurrent;
+            popEvents.sendBuffer = sendBufferParallelWriter;
             popEvents.connectionsToConnect = __connectionsToConnect.AsDeferredJobArray();
             popEvents.connectionsToDisconnect = __connectionsToDisconnect.AsParallelWriter();
             popEvents.connections = connections;

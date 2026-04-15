@@ -122,7 +122,7 @@ public struct NetworkServerSendBuffer
         public UnsafeList<int>.Enumerator GetEnumerator() => __values.GetEnumerator();
     }
 
-    public struct Concurrent
+    public struct ParallelWriter
     {
         public readonly int ChannelCount;
 
@@ -146,7 +146,7 @@ public struct NetworkServerSendBuffer
         private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendChannelConnectionOrders;
         private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendIdentityConnectionOrders;
 
-        public Concurrent(ref NetworkServerSendBuffer sendBuffer)
+        public ParallelWriter(ref NetworkServerSendBuffer sendBuffer)
         {
             ChannelCount = sendBuffer.ChannelCount;
             __connections = sendBuffer.__connections;
@@ -291,14 +291,14 @@ public struct NetworkServerSendBuffer
     {
         public uint ID;
 
-        private Concurrent __sendBuffer;
+        private ParallelWriter __sendBuffer;
 
         public int connectionIndex => __sendBuffer.GetConnectionIndex(ID);
 
         public int channelIndex => __sendBuffer.GetChannelIndex(ID);
 
         public Identity(uint id,
-            ref Concurrent sendBuffer)
+            ref ParallelWriter sendBuffer)
         {
             ID = id;
             __sendBuffer = sendBuffer;
@@ -313,12 +313,12 @@ public struct NetworkServerSendBuffer
 
         public bool AddChannel(uint id, int value)
         {
-            return __sendBuffer.AddChannel(ID, value);
+            return __sendBuffer.AddChannel(id, value);
         }
 
         public bool RemoveChannel(uint id, int value)
         {
-            return __sendBuffer.RemoveChannel(ID, value);
+            return __sendBuffer.RemoveChannel(id, value);
         }
 
         public bool BeginWrite(
@@ -586,7 +586,7 @@ public struct NetworkServerSendBuffer
         __sendIdentityConnectionOrders.Clear();
     }
 
-    public Concurrent AsConcurrent() => new Concurrent(ref this);
+    public ParallelWriter AsParallelWriter() => new ParallelWriter(ref this);
 
     public Sender AsSender() => new Sender(ref this);
 

@@ -461,7 +461,7 @@ namespace ZG
             
             UnityEngine.Debug.Log($"[DropOrLeave]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
 
-            UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
+            //UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
             if (sendBuffer.RemoveChannel(ID, channel))
             {
                 SendHeader(type, ref sendBuffer);

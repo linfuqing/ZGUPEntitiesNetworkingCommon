@@ -503,6 +503,9 @@ namespace ZG
             public NativeList<uint> matchIDs;
 
             [ReadOnly]
+            public NativeList<int> matchDistances;
+
+            [ReadOnly]
             public NativeParallelMultiHashMap<int, uint> matchDistanceIDs;
 
             [ReadOnly]
@@ -526,11 +529,34 @@ namespace ZG
                 }
 
                 var match = matches[identityIndex];
+                int distanceIndex = matchDistances.BinarySearch(match.value.distance);
+                if (distanceIndex == -1)
+                    return;
 
-                int distance = (int)math.ceil((time - match.startTime) / match.value.distanceTime), playerCount = 1, channelPlayerCount, channel;
-                for (int i = 0; i < distance; ++i)
+                int length = matchDistances.Length, 
+                    step = math.min((int)math.ceil((time - match.startTime) / match.value.distanceTime), 
+                        math.max(distanceIndex + 1, length - distanceIndex)), 
+                    x = distanceIndex, 
+                    y = distanceIndex - 1, 
+                    playerCount = 1, 
+                    channelPlayerCount, 
+                    channel, 
+                    temp;
+                for (int i = 0; i < step; ++i)
                 {
-                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
+                    if ((i & 1) == 0)
+                    {
+                        if (x < length)
+                            temp = x++;
+                        else
+                            continue;
+                    }
+                    else if(y < 0)
+                        continue;
+                    else
+                        temp = y--;
+                    
+                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(matchDistances[temp]))
                     {
                         if (/*distanceID == id || */!__CanMatch(true, distanceID, out _, out channel))
                             continue;
@@ -572,9 +598,23 @@ namespace ZG
                 drop.type =  NetworkRelayServerModifier.Type.Drop;
                 drop.destination = NetworkRelayServerIdentity.CHANNEL_NULL;
 
-                for (int i = 0; i < distance; ++i)
+                x = distanceIndex;
+                y = distanceIndex - 1;
+                for (int i = 0; i < step; ++i)
                 {
-                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(match.value.distance + i))
+                    if ((i & 1) == 0)
+                    {
+                        if (x < length)
+                            temp = x++;
+                        else
+                            continue;
+                    }
+                    else if(y < 0)
+                        continue;
+                    else
+                        temp = y--;
+
+                    foreach (var distanceID in matchDistanceIDs.GetValuesForKey(matchDistances[temp]))
                     {
                         if (/*distanceID == id || */!__CanMatch(true, distanceID, out _, out channel))
                             continue;
@@ -664,6 +704,8 @@ namespace ZG
             public NativeList<NetworkRelayServerMatch> matches;
 
             public NativeList<uint> matchIDs;
+
+            public NativeList<int> matchDistances;
 
             public NativeArray<int> matchCount;
 
@@ -765,6 +807,13 @@ namespace ZG
 
                                     int distance = this.matches[identityIndex].value.distance;
 
+                                    if (!matchDistanceIDs.ContainsKey(distance))
+                                    {
+                                        matchDistances.Add(distance);
+                                        
+                                        matchDistances.Sort();
+                                    }
+
                                     matchDistanceIDs.Add(distance, modifier.id);
                                 }
 
@@ -824,7 +873,8 @@ namespace ZG
                             {
                                 matchIDs.RemoveAtSwapBack(matchIndex);
 
-                                if (matchDistanceIDs.TryGetFirstValue(this.matches[identityIndex].value.distance, out id,
+                                int distance = this.matches[identityIndex].value.distance;
+                                if (matchDistanceIDs.TryGetFirstValue(distance, out id,
                                         out var iterator))
                                 {
                                     do
@@ -832,6 +882,10 @@ namespace ZG
                                         if (id == modifier.id)
                                         {
                                             matchDistanceIDs.Remove(iterator);
+                                            
+                                            if(!matchDistanceIDs.ContainsKey(distance))
+                                                matchDistances.RemoveAt(matchDistances.IndexOf(distance));
+                                            
                                             break;
                                         }
                                     } while (matchDistanceIDs.TryGetNextValue(out id, ref iterator));
@@ -978,6 +1032,8 @@ namespace ZG
 
             public NativeList<uint> matchIDs;
 
+            public NativeList<int> matchDistances;
+
             public NativeArray<int> matchCount;
 
             public NativeParallelMultiHashMap<int, uint> matchDistanceIDs;
@@ -990,6 +1046,7 @@ namespace ZG
                 match.identities = identities;
                 match.matches = matches;
                 match.matchIDs = matchIDs;
+                match.matchDistances = matchDistances;
                 match.matchDistanceIDs = matchDistanceIDs;
                 match.channelIDs = channelIDs;
                 match.modifiers = modifiers.AsParallelWriter();
@@ -1004,6 +1061,7 @@ namespace ZG
                 modifyChannels.channels = channels;
                 modifyChannels.matches = matches;
                 modifyChannels.matchIDs = matchIDs;
+                modifyChannels.matchDistances = matchDistances;
                 modifyChannels.matchCount = matchCount;
                 modifyChannels.matchDistanceIDs = matchDistanceIDs;
                 return modifyChannels.ScheduleByRef(jobHandle);
@@ -1022,6 +1080,8 @@ namespace ZG
         private NativeList<NetworkRelayServerMatch> __matches;
 
         private NativeList<uint> __matchIDs;
+
+        private NativeList<int> __matchDistances;
 
         private NativeArray<int> __matchCount;
 
@@ -1046,6 +1106,8 @@ namespace ZG
             __matches = new NativeList<NetworkRelayServerMatch>(allocator);
 
             __matchIDs = new NativeList<uint>(allocator);
+
+            __matchDistances = new NativeList<int>(allocator);
 
             __matchCount = CollectionHelper.CreateNativeArray<int>(1, allocator, NativeArrayOptions.ClearMemory);
 
@@ -1098,6 +1160,7 @@ namespace ZG
             __identities.Dispose();
             __matches.Dispose();
             __matchIDs.Dispose();
+            __matchDistances.Dispose();
             __matchCount.Dispose();
             __matchDistanceIDs.Dispose();
             __channelIDs.Dispose();
@@ -1143,12 +1206,13 @@ namespace ZG
             scheduler.identities = __identities;
             scheduler.matches = __matches;
             scheduler.matchIDs = __matchIDs;
+            scheduler.matchDistances = __matchDistances;
             scheduler.matchCount = __matchCount;
             scheduler.matchDistanceIDs = __matchDistanceIDs;
 
             return __instance.Schedule(ref listener, ref handler, ref scheduler, ref __sendBuffer, 
                 innerloopBatchCount, Pipeline, 
-                in inputDeps);
+                inputDeps);
         }
     }
 }

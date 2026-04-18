@@ -305,12 +305,13 @@ namespace ZG
         
         public bool Create(
             //int channel,
+            bool isTemp, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
             int channel = sendBuffer.GetChannelIndex(ID);
-            if (__CreateOrJoin(NetworkRelayChannelFlag.Creator,
+            if (__CreateOrJoin(isTemp ? NetworkRelayChannelFlag.Temp | NetworkRelayChannelFlag.Creator : NetworkRelayChannelFlag.Creator,
                     (int)NetworkRelayMessageType.Create,
                     channel,
                     ref sendBuffer))

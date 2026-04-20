@@ -65,22 +65,24 @@ namespace ZG
             writer.Write(ref reader);
         }
 
-        private static void SendChannelJoins(
+        private static void SendChannelJoins<T>(
             int channel, 
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             int identityIndex;
             NetworkRelayServerIdentity identity;
-            foreach (var id in channelIDs.GetValuesForKey(channel))
+            foreach (var channelID in channelIDs.GetValuesForKey(channel))
             {
-                if (id == sendBuffer.ID)
+                if (channelID == id)
                     continue;
 
-                identityIndex = sendBuffer.GetChannelIndex(id);
+                identityIndex = sendBuffer.GetChannelIndex(channelID);
                 identity = identities[identityIndex];
                 identity.SendHeader((int)NetworkRelayMessageType.Join,
+                    id, 
                     ref sendBuffer);
             }
         }
@@ -117,10 +119,11 @@ namespace ZG
             channelFlag |= NetworkRelayChannelFlag.Temp;
         }
 
-        public void Connect(
+        public void Connect<T>(
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             isOnline = true;
 
@@ -140,9 +143,10 @@ namespace ZG
                                     NetworkRelayChannelFlag.Creator
                         ? (int)NetworkRelayMessageType.Create
                         : (int)NetworkRelayMessageType.Join,
+                    id, 
                     ref sendBuffer);
                 
-                SendChannelJoins(channel, identities, channelIDs, ref sendBuffer);
+                SendChannelJoins(channel, id, identities, channelIDs, ref sendBuffer);
             }
 
             NetworkRelayServerIdentity identity;
@@ -159,7 +163,7 @@ namespace ZG
                     }
                 }
 
-                if (sendBuffer.BeginWrite(sendBuffer.ID, out writer))
+                if (sendBuffer.BeginWrite(id, out writer))
                 {
                     identity.__WriteStatus((int)NetworkRelayMessageType.Add, ref writer);
                     
@@ -168,9 +172,10 @@ namespace ZG
             }
         }
 
-        public void Disconnect(
+        public void Disconnect<T>(
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             int channel = this.channel;
             if (channel != CHANNEL_NULL)
@@ -199,10 +204,10 @@ namespace ZG
             isOnline = false;
             
             if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
-                Leave(ref sendBuffer);
+                Leave(id, ref sendBuffer);
         }
 
-        public bool AddFriend(uint id, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool AddFriend<T>(uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (__friendIDs.Contains(id))
                 return false;
@@ -219,7 +224,7 @@ namespace ZG
             return true;
         }
 
-        public bool RemoveFriend(uint id, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool RemoveFriend<T>(uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             int index = __friendIDs.IndexOf(id);
             if (index == -1)
@@ -237,9 +242,11 @@ namespace ZG
             return true;
         }
         
-        public bool SetStatus(int value, 
+        public bool SetStatus<T>(
+            int value, 
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             int channelStatus = (int)this.channelFlag;
             channelStatus >>= (int)NetworkRelayChannelFlag.ShiftToStatus;
@@ -247,7 +254,7 @@ namespace ZG
                 return false;
 
             if (value == 0 && (this.channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
-                Leave(ref sendBuffer);
+                Leave(id, ref sendBuffer);
 
             var channelFlag = this.channelFlag;
             channelFlag &= NetworkRelayChannelFlag.All;
@@ -280,14 +287,15 @@ namespace ZG
             return true;
         }
 
-        public void SendHeader(
+        public void SendHeader<T>(
             int type,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            uint id, 
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             //UnityEngine.Debug.Log($"[SendHeader]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
-            bool isSendOthers = sendBuffer.ID != ID;
+            bool isSendOthers = id != ID;
             var payload = sendBuffer.GetPayload(ID);
-            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer,
+            if (sendBuffer.BeginWrite(id, out var writer,
                     (ushort)((isSendOthers ? payload.Length : 0) + 3 * UnsafeUtility.SizeOf<int>())))
             {
                 __WriteHeader(isSendOthers, type, payload, ref writer);
@@ -296,10 +304,10 @@ namespace ZG
             }
         }
 
-        public void SendHeader(
+        public void SendHeader<T>(
             int channel, 
             int type,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (sendBuffer.BeginWrite(channel, out var writer))
             {
@@ -309,20 +317,22 @@ namespace ZG
             }
         }
         
-        public bool Create(
+        public bool Create<T>(
             //int channel,
             bool isTemp, 
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             int channel = sendBuffer.GetChannelIndex(ID);
             if (__CreateOrJoin(isTemp ? NetworkRelayChannelFlag.Temp | NetworkRelayChannelFlag.Creator : NetworkRelayChannelFlag.Creator,
                     (int)NetworkRelayMessageType.Create,
                     channel,
+                    id, 
                     ref sendBuffer))
             {
-                SendChannelJoins(channel, identities, channelIDs, ref sendBuffer);
+                SendChannelJoins(channel, id, identities, channelIDs, ref sendBuffer);
                 
                 return true;
             }
@@ -330,20 +340,22 @@ namespace ZG
             return false;
         }
         
-        public bool Join(
+        public bool Join<T>(
             bool isTemp, 
             int channel,
+            uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (__CreateOrJoin(
                     isTemp ? NetworkRelayChannelFlag.Temp : 0,
                     (int)NetworkRelayMessageType.Join,
                     channel,
+                    id, 
                     ref sendBuffer))
             {
-                SendChannelJoins(channel, identities, channelIDs, ref sendBuffer);
+                SendChannelJoins(channel, id, identities, channelIDs, ref sendBuffer);
                 
                 return true;
             }
@@ -351,18 +363,19 @@ namespace ZG
             return false;
         }
 
-        public bool Leave(ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool Leave<T>(uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            return __DropOrLeave((int)NetworkRelayMessageType.Leave, ref sendBuffer);
+            return __DropOrLeave((int)NetworkRelayMessageType.Leave, id, ref sendBuffer);
         }
 
-        public bool Drop(
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool Drop<T>(
+            uint id, 
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            return __DropOrLeave((int)NetworkRelayMessageType.Drop, ref sendBuffer);
+            return __DropOrLeave((int)NetworkRelayMessageType.Drop, id, ref sendBuffer);
         }
 
-        public bool Matching(int value, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool Matching<T>(int value, uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (match != 0 || 
                 channel != CHANNEL_NULL && (channelFlag & NetworkRelayChannelFlag.Creator) != NetworkRelayChannelFlag.Creator || 
@@ -371,14 +384,14 @@ namespace ZG
             
             match = value;
             
-            __Match((int)NetworkRelayMessageType.Matching, ref sendBuffer);
+            __Match((int)NetworkRelayMessageType.Matching, id, ref sendBuffer);
             
             return true;
         }
 
-        public void Match(int match, int distance, ref NetworkServerSendBuffer.Identity sendBuffer)
+        public void Match<T>(int match, int distance, uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            if (sendBuffer.BeginWrite(sendBuffer.ID, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
+            if (sendBuffer.BeginWrite(id, out var writer, (ushort)(3 * UnsafeUtility.SizeOf<int>())))
             {
                 var streamCompressionModel = StreamCompressionModel.Default;
 
@@ -391,11 +404,11 @@ namespace ZG
             this.match = 0;
         }
         
-        public bool Mismatch(ref NetworkServerSendBuffer.Identity sendBuffer)
+        public bool Mismatch<T>(uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (match != 0)
             {
-                __Match((int)NetworkRelayMessageType.Mismatch, ref sendBuffer);
+                __Match((int)NetworkRelayMessageType.Mismatch, id, ref sendBuffer);
 
                 match = 0;
 
@@ -405,11 +418,12 @@ namespace ZG
             return false;
         }
 
-        public void Relay(
+        public void Relay<T>(
             int type,
             NetworkRelayType relayType,
+            uint id, 
             ref DataStreamReader reader,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             ushort capacity = (ushort)(reader.Length - reader.GetBytesRead() + 3 * UnsafeUtility.SizeOf<int>());
             DataStreamWriter writer;
@@ -429,63 +443,66 @@ namespace ZG
                     break;
             }
 
-            SendRelay(type, (int)relayType, sendBuffer.ID, ref reader, ref writer);
+            SendRelay(type, (int)relayType, id, ref reader, ref writer);
 
             sendBuffer.EndWrite(writer);
         }
 
-        private bool __CreateOrJoin(
+        private bool __CreateOrJoin<T>(
             NetworkRelayChannelFlag channelFlag, 
             int type, 
             int channel,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            uint id, 
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
+            UnityEngine.Assertions.Assert.AreEqual(ID, id);
             if (match != 0 || channel == CHANNEL_NULL || !sendBuffer.AddChannel(ID, channel))
                 return false;
 
-            Leave(ref sendBuffer);
+            Leave(id, ref sendBuffer);
             
-            UnityEngine.Debug.Log($"[CreateOrJoin]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
+            UnityEngine.Debug.Log($"[CreateOrJoin]{(NetworkRelayMessageType)type} {ID} to {id} in {channel}");
             
             this.channelFlag |= channelFlag;
             this.channel = channel;
 
-            SendHeader(type, ref sendBuffer);
+            SendHeader(type, id, ref sendBuffer);
             SendHeader(channel, type, ref sendBuffer);
 
-            Mismatch(ref sendBuffer);
+            Mismatch(id, ref sendBuffer);
 
             return true;
         }
 
-        private bool __DropOrLeave(
+        private bool __DropOrLeave<T>(
             int type, 
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            uint id, 
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             if (channel == CHANNEL_NULL)
                 return false;
             
-            UnityEngine.Debug.Log($"[DropOrLeave]{(NetworkRelayMessageType)type} {ID} to {sendBuffer.ID} in {channel}");
+            UnityEngine.Debug.Log($"[DropOrLeave]{(NetworkRelayMessageType)type} {ID} to {id} in {channel}");
 
             //UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
             if (sendBuffer.RemoveChannel(ID, channel))
             {
-                SendHeader(type, ref sendBuffer);
+                SendHeader(type, id, ref sendBuffer);
                 SendHeader(channel, type, ref sendBuffer);
             }
 
             channelFlag &= ~(NetworkRelayChannelFlag.Creator | NetworkRelayChannelFlag.Temp);
             channel = CHANNEL_NULL;
             
-            Mismatch(ref sendBuffer);
+            Mismatch(id, ref sendBuffer);
 
             return true;
         }
         
-        private void __Match(
+        private void __Match<T>(
             int type,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            uint id, 
+            ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
             var streamCompressionModel = StreamCompressionModel.Default;
 
@@ -498,7 +515,7 @@ namespace ZG
                 sendBuffer.EndWrite(writer);
             }
 
-            if (sendBuffer.BeginWrite(sendBuffer.ID, out writer, (ushort)(2 * UnsafeUtility.SizeOf<int>())))
+            if (sendBuffer.BeginWrite(id, out writer, (ushort)(2 * UnsafeUtility.SizeOf<int>())))
             {
                 writer.WritePackedInt(type, streamCompressionModel);
                 writer.WritePackedInt(match, streamCompressionModel);

@@ -122,12 +122,11 @@ namespace ZG
 
         public void Reconnect(uint id, ref NetworkServerSendBuffer sendBuffer)
         {
-            var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
-            var sendBufferIdentity = new NetworkServerSendBuffer.Identity(id, ref sendBufferParallelWriter);
+            var sendBufferIdentity = new NetworkServerSendBuffer.Identity(id, ref sendBuffer);
             var identityIndex = sendBufferIdentity.channelIndex;
             var identity = identities[identityIndex];
             int source = identity.channel;
-            identity.Disconnect(identities.AsArray(), ref sendBufferIdentity);
+            identity.Disconnect(sendBufferIdentity.ID, identities.AsArray(), ref sendBufferIdentity);
             int destination = identity.channel;
             if (destination != source)
             {
@@ -137,7 +136,12 @@ namespace ZG
                 if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
                     channels.ElementAt(source).Join(out _);
 
-                __Modify(NetworkRelayServerModifier.Type.Leave, source, destination,
+                __Modify(
+                    destination == NetworkRelayServerIdentity.CHANNEL_NULL
+                        ? NetworkRelayServerModifier.Type.Leave
+                        : NetworkRelayServerModifier.Type.Join,
+                    source,
+                    destination,
                     id);
             }
             identities[identityIndex] = identity;
@@ -175,20 +179,20 @@ namespace ZG
 
         public NativeQueue<NetworkRelayServerModifier>.ParallelWriter modifiers;
 
-        public void Connect(ref NetworkServerSendBuffer.Identity sendBuffer)
+        public void Connect(ref NetworkServerSendBuffer.ParallelIdentity sendBuffer)
         {
             var identityIndex = sendBuffer.channelIndex;
             var identity = identities[identityIndex];
-            identity.Connect(identities, channelIDs, ref sendBuffer);
+            identity.Connect(sendBuffer.ID, identities, channelIDs, ref sendBuffer);
             identities[identityIndex] = identity;
         }
 
-        public void Disconnect(ref NetworkServerSendBuffer.Identity sendBuffer)
+        public void Disconnect(ref NetworkServerSendBuffer.ParallelIdentity sendBuffer)
         {
             var identityIndex = sendBuffer.channelIndex;
             var identity = identities[identityIndex];
             int source = identity.channel;
-            identity.Disconnect(identities, ref sendBuffer);
+            identity.Disconnect(sendBuffer.ID, identities, ref sendBuffer);
             int destination = identity.channel;
             if (destination != source)
             {
@@ -205,7 +209,7 @@ namespace ZG
         }
 
         public void Read(ref DataStreamReader reader,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref NetworkServerSendBuffer.ParallelIdentity sendBuffer)
         {
             var streamCompressionModel = StreamCompressionModel.Default;
             int type = reader.ReadPackedInt(streamCompressionModel);
@@ -217,7 +221,10 @@ namespace ZG
                         var identity = identities[identityIndex];
 
                         int source = identity.channel;
-                        if (identity.SetStatus(reader.ReadPackedInt(streamCompressionModel), identities,
+                        if (identity.SetStatus(
+                                reader.ReadPackedInt(streamCompressionModel), 
+                                sendBuffer.ID, 
+                                identities,
                                 ref sendBuffer))
                         {
                             int destination = identity.channel;
@@ -282,6 +289,7 @@ namespace ZG
                                           NetworkRelayChannelFlag.Creator) == NetworkRelayChannelFlag.Creator, 
                             result = identity.Create(
                                 false, 
+                                sendBuffer.ID, 
                                 //sendBuffer.channelIndex,
                                 identities, 
                                 channelIDs, 
@@ -322,6 +330,7 @@ namespace ZG
                                 if (identity.Join(
                                         false,
                                         targetChannelIndex,
+                                        sendBuffer.ID, 
                                         identities,
                                         channelIDs,
                                         ref sendBuffer))
@@ -361,8 +370,7 @@ namespace ZG
                         var identityIndex = sendBuffer.channelIndex;
                         var identity = identities[identityIndex];
                         int channel = identity.channel;
-                        if (identity.Leave(
-                            ref sendBuffer))
+                        if (identity.Leave(sendBuffer.ID,  ref sendBuffer))
                         {
                             NetworkRelayServerChannel
                                 .ElementAt(ref channels, channel).Leave();
@@ -394,7 +402,7 @@ namespace ZG
                     {
                         var identityIndex = sendBuffer.channelIndex;
                         var identity = identities[identityIndex];
-                        if (identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), ref sendBuffer))
+                        if (identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), sendBuffer.ID, ref sendBuffer))
                         {
                             //UnityEngine.Debug.Log("Matching ID: " + identity.ID);
                             
@@ -416,7 +424,7 @@ namespace ZG
                     {
                         var identityIndex = sendBuffer.channelIndex;
                         var identity = identities[identityIndex];
-                        if (identity.Mismatch(ref sendBuffer))
+                        if (identity.Mismatch(sendBuffer.ID, ref sendBuffer))
                         {
                             int channel = identity.channel;
                             identities[identityIndex] = identity;
@@ -435,7 +443,7 @@ namespace ZG
                             identityIndex = sendBuffer.GetChannelIndex(id);
                             identity = identities[identityIndex];
                             identity.SendHeader((int)NetworkRelayMessageType.Query,
-                                ref sendBuffer);
+                                sendBuffer.ID, ref sendBuffer);
                         }
                     }
                     break;
@@ -446,7 +454,7 @@ namespace ZG
 
                         NetworkRelayType relayType = (NetworkRelayType)reader.ReadPackedInt(streamCompressionModel);
 
-                        identity.Relay(type, relayType, ref reader,
+                        identity.Relay(type, relayType, sendBuffer.ID, ref reader,
                             ref sendBuffer);
                     }
                     break;
@@ -458,7 +466,7 @@ namespace ZG
             bool isCreator,
             int channel,
             int targetChannel,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref NetworkServerSendBuffer.ParallelIdentity sendBuffer)
         {
             if (targetChannel == channel)
                 return false;
@@ -490,7 +498,7 @@ namespace ZG
         }
 
         private void __Modify(NetworkRelayServerModifier.Type type, int source, int destination, uint id,
-            ref NetworkServerSendBuffer.Identity sendBuffer)
+            ref NetworkServerSendBuffer.ParallelIdentity sendBuffer)
         {
             /*if (id != sendBuffer.ID)
             {
@@ -758,7 +766,7 @@ namespace ZG
         [BurstCompile]
         private struct ModifyChannels : IJob
         {
-            public NetworkServerSendBuffer.ParallelWriter sendBuffer;
+            public NetworkServerSendBuffer.Writer sendBuffer;
 
             public NativeQueue<NetworkRelayServerModifier> modifiers;
             public NativeParallelMultiHashMap<int, uint> channelIDs;
@@ -861,7 +869,7 @@ namespace ZG
                                 }
 
                                 var sendBuffer = new NetworkServerSendBuffer.Identity(modifier.id, ref this.sendBuffer);
-                                if(identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), ref sendBuffer))
+                                if(identity.Matching(Interlocked.Increment(ref matchCount.AsSpan()[0]), sendBuffer.ID, ref sendBuffer))
                                     identities[identityIndex] = identity;
                             }
 
@@ -940,7 +948,7 @@ namespace ZG
                             if (NetworkRelayServerModifier.Type.Match == modifier.type)
                             {
                                 var temp = this.matches[modifier.destination];
-                                identity.Match(temp.index, temp.value.distance, ref sendBuffer);
+                                identity.Match(temp.index, temp.value.distance, sendBuffer.ID, ref sendBuffer);
 
                                 modifier.source = identity.channel;
 
@@ -949,6 +957,7 @@ namespace ZG
                                 {
                                     if (!identity.Create( //channelModifier.destination, 
                                             true,
+                                            sendBuffer.ID, 
                                             identities.AsArray(),
                                             channelIDs,
                                             ref sendBuffer))
@@ -968,6 +977,7 @@ namespace ZG
                                 {
                                     if (!identity.Join(true,
                                             modifier.destination,
+                                            sendBuffer.ID, 
                                             identities.AsArray(),
                                             channelIDs,
                                             ref sendBuffer))
@@ -990,12 +1000,13 @@ namespace ZG
 
                                     identities[sendBuffer.GetChannelIndex(channelID)].SendHeader(
                                         (int)NetworkRelayMessageType.Join,
+                                        sendBuffer.ID, 
                                         ref sendBuffer);
                                 }
                             }
                             else
                             {
-                                if (identity.Mismatch(ref sendBuffer))
+                                if (identity.Mismatch(sendBuffer.ID, ref sendBuffer))
                                     identities[identityIndex] = identity;
 
                                 continue;
@@ -1089,7 +1100,7 @@ namespace ZG
                         }
                     }
 
-                    if (identity.Drop(ref sendBuffer))
+                    if (identity.Drop(sendBuffer.ID, ref sendBuffer))
                     {
                         channels.ElementAt(source).Leave();
 
@@ -1173,7 +1184,7 @@ namespace ZG
                 ModifyChannels modifyChannels;
                 modifyChannels.channelIDs = channelIDs;
                 modifyChannels.modifiers = modifiers;
-                modifyChannels.sendBuffer = sendBuffer.AsParallelWriter();
+                modifyChannels.sendBuffer = sendBuffer.AsWriter(true);
                 modifyChannels.identities = identities;
                 modifyChannels.channels = channels;
                 modifyChannels.matches = matches;

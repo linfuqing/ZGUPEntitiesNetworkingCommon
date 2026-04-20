@@ -35,12 +35,12 @@ namespace ZG
     
     public interface INetworkServerHandler
     {
-        void Connect(ref NetworkServerSendBuffer.Identity sendBuffer);
+        void Connect(ref NetworkServerSendBuffer.ParallelIdentity sendBuffer);
 
-        void Disconnect(ref NetworkServerSendBuffer.Identity sendBuffer);
+        void Disconnect(ref NetworkServerSendBuffer.ParallelIdentity sendBuffer);
 
         void Read(ref DataStreamReader reader,
-            ref NetworkServerSendBuffer.Identity sendBuffer);
+            ref NetworkServerSendBuffer.ParallelIdentity sendBuffer);
     }
 
     public interface INetworkServerScheduler
@@ -115,6 +115,7 @@ namespace ZG
         private void __Disconnect(bool isConnected, in NetworkConnection connection)
         {
             uint id = sendBuffer.connectionIDs[connection];
+            
             if(isConnected)
                 listener.Reconnect(id, ref sendBuffer);
             else
@@ -146,7 +147,7 @@ namespace ZG
         {
             var connection = connections[index];
             
-            var sendBuffer = new NetworkServerSendBuffer.Identity(connectionIDs[connection], ref this.sendBuffer);
+            var sendBuffer = new NetworkServerSendBuffer.ParallelIdentity(connectionIDs[connection], ref this.sendBuffer);
 
             if(connectionsToConnect.IndexOf(connection) != -1)
                 handler.Connect(ref sendBuffer);

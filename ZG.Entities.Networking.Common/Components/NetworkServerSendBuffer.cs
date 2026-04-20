@@ -5,6 +5,30 @@ using Unity.Mathematics;
 using Unity.Networking.Transport;
 using ZG;
 
+public interface INetworkServerSendBuffer
+{
+    int GetChannelIndex(uint id);
+
+    NativeArray<byte> GetPayload(uint id);
+
+    bool AddChannel(uint id, int value);
+
+    bool RemoveChannel(uint id, int value);
+
+    bool BeginWrite(
+        out DataStreamWriter writer, ushort capacity = 1024);
+
+    bool BeginWrite(
+        int channel,
+        out DataStreamWriter writer, ushort capacity = 1024);
+
+    bool BeginWrite(
+        uint id,
+        out DataStreamWriter writer, ushort capacity = 1024);
+
+    void EndWrite(in DataStreamWriter writer);
+}
+
 public struct NetworkServerSendBuffer
 {
     private struct ConnectionIndex
@@ -122,7 +146,7 @@ public struct NetworkServerSendBuffer
         public UnsafeList<int>.Enumerator GetEnumerator() => __values.GetEnumerator();
     }
 
-    public struct ParallelWriter
+    private struct Core
     {
         public readonly int ChannelCount;
 
@@ -142,23 +166,27 @@ public struct NetworkServerSendBuffer
         private NativeArray<UnsafeList<int>> __targets;
         [NativeDisableParallelForRestriction]
         private NativeArray<NetworkSendBuffer> __buffers;
-        private NativeList<ConnectionOrder>.ParallelWriter __sendAllConnectionOrders;
-        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendChannelConnectionOrders;
-        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendIdentityConnectionOrders;
 
-        public ParallelWriter(ref NetworkServerSendBuffer sendBuffer)
+        public Core(ref NetworkServerSendBuffer sendBuffer, bool isDeferredJob)
         {
             ChannelCount = sendBuffer.ChannelCount;
             __connections = sendBuffer.__connections;
             __connectionIndices = sendBuffer.__connectionIndices;
             __connectionOrders = sendBuffer.__connectionOrders;
-            __payloads = sendBuffer.__payloads.AsDeferredJobArray();
-            __channels = sendBuffer.__channels.AsDeferredJobArray();
-            __targets = sendBuffer.__targets.AsDeferredJobArray();
-            __buffers = sendBuffer.__buffers.AsDeferredJobArray();
-            __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders.AsParallelWriter();
-            __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders.AsParallelWriter();
-            __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders.AsParallelWriter();
+            if (isDeferredJob)
+            {
+                __payloads = sendBuffer.__payloads.AsDeferredJobArray();
+                __channels = sendBuffer.__channels.AsDeferredJobArray();
+                __targets = sendBuffer.__targets.AsDeferredJobArray();
+                __buffers = sendBuffer.__buffers.AsDeferredJobArray();
+            }
+            else
+            {
+                __payloads = sendBuffer.__payloads.AsArray();
+                __channels = sendBuffer.__channels.AsArray();
+                __targets = sendBuffer.__targets.AsArray();
+                __buffers = sendBuffer.__buffers.AsArray();
+            }
         }
 
         public NativeArray<byte> GetPayload(uint id)
@@ -229,16 +257,15 @@ public struct NetworkServerSendBuffer
             return __BeginWrite(capacity, GetTargetFromConnectionIndex(connectionIndex.value), id, out writer);
         }
 
-        public void EndWrite(in DataStreamWriter writer)
+        public bool EndWrite(in DataStreamWriter writer, out ConnectionOrder connectionOrder, out int target)
         {
-            ConnectionOrder connectionOrder;
             connectionOrder.bufferIndex = (int)writer.m_SendHandleData;
 
             var buffer = __buffers[connectionOrder.bufferIndex];
             buffer.EndWrite(writer);
             __buffers[connectionOrder.bufferIndex] = buffer;
 
-            int target = GetBufferTarget(connectionOrder.bufferIndex, __GetChannelCount(), __connections.Length,
+            target = GetBufferTarget(connectionOrder.bufferIndex, __GetChannelCount(), __connections.Length,
                 out connectionOrder.connectionIndex);
             var targets = __targets[connectionOrder.connectionIndex];
             if(targets.IndexOf(target) == -1)
@@ -249,13 +276,18 @@ public struct NetworkServerSendBuffer
 
                 connectionOrder.value = System.Threading.Interlocked.Increment(ref __connectionOrders.AsSpan()[0]);
 
-                if (target > 0)
+                return true;
+                /*if (target > 0)
                     __sendIdentityConnectionOrders.Add(target - 1, connectionOrder);
                 else if (target < 0)
                     __sendChannelConnectionOrders.Add(-target - 1, connectionOrder);
                 else
-                    __sendAllConnectionOrders.AddNoResize(connectionOrder);
+                    __sendAllConnectionOrders.AddNoResize(connectionOrder);*/
             }
+
+            connectionOrder.value = 0;
+
+            return false;
         }
 
         private bool __BeginWrite(ushort capacity, int target, uint id, out DataStreamWriter writer)
@@ -287,63 +319,222 @@ public struct NetworkServerSendBuffer
         private int __GetChannelCount() => ChannelCount == 0 ? __channels.Length : ChannelCount;
     }
 
-    public struct Identity
+    public struct Writer
+    {
+        private Core __core;
+        
+        private NativeList<ConnectionOrder> __sendAllConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder> __sendChannelConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder> __sendIdentityConnectionOrders;
+
+        public Writer(ref NetworkServerSendBuffer sendBuffer, bool isDeferredJob)
+        {
+            __core = new Core(ref sendBuffer, isDeferredJob);
+            __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders;
+            __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders;
+            __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders;
+        }
+
+        public NativeArray<byte> GetPayload(uint id) => __core.GetPayload(id);
+
+        public int GetConnectionIndex(uint id) => __core.GetConnectionIndex(id);
+
+        public int GetChannelIndex(uint id) => __core.GetChannelIndex(id);
+
+        public bool AddChannel(uint id, int value) => __core.AddChannel(id, value);
+
+        public bool RemoveChannel(uint id, int value) => __core.RemoveChannel(id, value);
+
+        public bool BeginWrite(uint id, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, out writer, capacity);
+
+        public bool BeginWrite(uint id, int channel, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, channel, out writer, capacity);
+
+        public bool BeginWrite(uint id, uint targetID, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, targetID, out writer, capacity);
+
+        public void EndWrite(in DataStreamWriter writer)
+        {
+            if(__core.EndWrite(writer, out var connectionOrder, out int target))
+            {
+                if (target > 0)
+                    __sendIdentityConnectionOrders.Add(target - 1, connectionOrder);
+                else if (target < 0)
+                    __sendChannelConnectionOrders.Add(-target - 1, connectionOrder);
+                else
+                    __sendAllConnectionOrders.Add(connectionOrder);
+            }
+        }
+    }
+    
+    public struct ParallelWriter
+    {
+        private Core __core;
+        
+        private NativeList<ConnectionOrder>.ParallelWriter __sendAllConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendChannelConnectionOrders;
+        private NativeParallelMultiHashMap<int, ConnectionOrder>.ParallelWriter __sendIdentityConnectionOrders;
+
+        public ParallelWriter(ref NetworkServerSendBuffer sendBuffer)
+        {
+            __core = new Core(ref sendBuffer, true);
+            __sendAllConnectionOrders = sendBuffer.__sendAllConnectionOrders.AsParallelWriter();
+            __sendChannelConnectionOrders = sendBuffer.__sendChannelConnectionOrders.AsParallelWriter();
+            __sendIdentityConnectionOrders = sendBuffer.__sendIdentityConnectionOrders.AsParallelWriter();
+        }
+
+        public NativeArray<byte> GetPayload(uint id) => __core.GetPayload(id);
+
+        public int GetConnectionIndex(uint id) => __core.GetConnectionIndex(id);
+
+        public int GetChannelIndex(uint id) => __core.GetChannelIndex(id);
+
+        public bool AddChannel(uint id, int value) => __core.AddChannel(id, value);
+
+        public bool RemoveChannel(uint id, int value) => __core.RemoveChannel(id, value);
+
+        public bool BeginWrite(uint id, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, out writer, capacity);
+
+        public bool BeginWrite(uint id, int channel, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, channel, out writer, capacity);
+
+        public bool BeginWrite(uint id, uint targetID, out DataStreamWriter writer, ushort capacity = 1024) => __core.BeginWrite(id, targetID, out writer, capacity);
+
+        public void EndWrite(in DataStreamWriter writer)
+        {
+            if(__core.EndWrite(writer, out var connectionOrder, out int target))
+            {
+                if (target > 0)
+                    __sendIdentityConnectionOrders.Add(target - 1, connectionOrder);
+                else if (target < 0)
+                    __sendChannelConnectionOrders.Add(-target - 1, connectionOrder);
+                else
+                    __sendAllConnectionOrders.AddNoResize(connectionOrder);
+            }
+        }
+    }
+
+    public struct ParallelIdentity : INetworkServerSendBuffer
     {
         public uint ID;
 
-        private ParallelWriter __sendBuffer;
+        private ParallelWriter __writer;
 
-        public int connectionIndex => __sendBuffer.GetConnectionIndex(ID);
+        public int connectionIndex => __writer.GetConnectionIndex(ID);
 
-        public int channelIndex => __sendBuffer.GetChannelIndex(ID);
+        public int channelIndex => __writer.GetChannelIndex(ID);
 
-        public Identity(uint id,
+        public ParallelIdentity(uint id,
             ref ParallelWriter sendBuffer)
         {
             ID = id;
-            __sendBuffer = sendBuffer;
+            __writer = sendBuffer;
         }
 
-        public int GetChannelIndex(uint id) => __sendBuffer.GetChannelIndex(id);
+        public int GetChannelIndex(uint id) => __writer.GetChannelIndex(id);
 
         public NativeArray<byte> GetPayload(uint id)
         {
-            return __sendBuffer.GetPayload(id);
+            return __writer.GetPayload(id);
         }
 
         public bool AddChannel(uint id, int value)
         {
-            return __sendBuffer.AddChannel(id, value);
+            return __writer.AddChannel(id, value);
         }
 
         public bool RemoveChannel(uint id, int value)
         {
-            return __sendBuffer.RemoveChannel(id, value);
+            return __writer.RemoveChannel(id, value);
         }
 
         public bool BeginWrite(
             out DataStreamWriter writer, ushort capacity = 1024)
         {
-            return __sendBuffer.BeginWrite(ID, out writer, capacity);
+            return __writer.BeginWrite(ID, out writer, capacity);
         }
 
         public bool BeginWrite(
             int channel,
             out DataStreamWriter writer, ushort capacity = 1024)
         {
-            return __sendBuffer.BeginWrite(ID, channel, out writer, capacity);
+            return __writer.BeginWrite(ID, channel, out writer, capacity);
         }
 
         public bool BeginWrite(
             uint id,
             out DataStreamWriter writer, ushort capacity = 1024)
         {
-            return __sendBuffer.BeginWrite(ID, id, out writer, capacity);
+            return __writer.BeginWrite(ID, id, out writer, capacity);
         }
 
         public void EndWrite(in DataStreamWriter writer)
         {
-            __sendBuffer.EndWrite(writer);
+            __writer.EndWrite(writer);
+        }
+    }
+
+    public struct Identity : INetworkServerSendBuffer
+    {
+        public uint ID;
+
+        private Writer __writer;
+
+        public int connectionIndex => __writer.GetConnectionIndex(ID);
+
+        public int channelIndex => __writer.GetChannelIndex(ID);
+
+        public Identity(uint id,
+            ref Writer writer)
+        {
+            ID = id;
+            __writer = writer;
+        }
+        
+        public Identity(uint id,
+            ref NetworkServerSendBuffer sendBuffer)
+        {
+            ID = id;
+            __writer = sendBuffer.AsWriter(false);
+        }
+        
+        public int GetChannelIndex(uint id) => __writer.GetChannelIndex(id);
+
+        public NativeArray<byte> GetPayload(uint id)
+        {
+            return __writer.GetPayload(id);
+        }
+
+        public bool AddChannel(uint id, int value)
+        {
+            return __writer.AddChannel(id, value);
+        }
+
+        public bool RemoveChannel(uint id, int value)
+        {
+            return __writer.RemoveChannel(id, value);
+        }
+
+        public bool BeginWrite(
+            out DataStreamWriter writer, ushort capacity = 1024)
+        {
+            return __writer.BeginWrite(ID, out writer, capacity);
+        }
+
+        public bool BeginWrite(
+            int channel,
+            out DataStreamWriter writer, ushort capacity = 1024)
+        {
+            return __writer.BeginWrite(ID, channel, out writer, capacity);
+        }
+
+        public bool BeginWrite(
+            uint id,
+            out DataStreamWriter writer, ushort capacity = 1024)
+        {
+            return __writer.BeginWrite(ID, id, out writer, capacity);
+        }
+
+        public void EndWrite(in DataStreamWriter writer)
+        {
+            __writer.EndWrite(writer);
         }
     }
 
@@ -585,6 +776,8 @@ public struct NetworkServerSendBuffer
         __sendChannelConnectionOrders.Clear();
         __sendIdentityConnectionOrders.Clear();
     }
+
+    public Writer AsWriter(bool isDeferredJob) => new Writer(ref this, isDeferredJob);
 
     public ParallelWriter AsParallelWriter() => new ParallelWriter(ref this);
 

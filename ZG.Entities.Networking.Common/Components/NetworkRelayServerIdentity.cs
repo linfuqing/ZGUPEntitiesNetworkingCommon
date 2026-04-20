@@ -112,6 +112,11 @@ namespace ZG
             __friendIDs.Clear();
         }
 
+        public void SetTemp()
+        {
+            channelFlag |= NetworkRelayChannelFlag.Temp;
+        }
+
         public void Connect(
             in NativeArray<NetworkRelayServerIdentity> identities, 
             in NativeParallelMultiHashMap<int, uint> channelIDs, 
@@ -192,6 +197,9 @@ namespace ZG
             }
 
             isOnline = false;
+            
+            if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
+                Leave(ref sendBuffer);
         }
 
         public bool AddFriend(uint id, ref NetworkServerSendBuffer.Identity sendBuffer)
@@ -233,19 +241,17 @@ namespace ZG
             in NativeArray<NetworkRelayServerIdentity> identities, 
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
+            int channelStatus = (int)this.channelFlag;
+            channelStatus >>= (int)NetworkRelayChannelFlag.ShiftToStatus;
+            if (channelStatus == value)
+                return false;
+
+            if (value == 0 && (this.channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
+                Leave(ref sendBuffer);
+
             var channelFlag = this.channelFlag;
             channelFlag &= NetworkRelayChannelFlag.All;
             channelFlag |= (NetworkRelayChannelFlag)(value << (int)NetworkRelayChannelFlag.ShiftToStatus);
-            if (channelFlag == this.channelFlag)
-                return false;
-
-            if (value == 0 && (channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
-            {
-                channelFlag &= ~NetworkRelayChannelFlag.Temp;
-
-                Leave(ref sendBuffer);
-            }
-
             this.channelFlag = channelFlag;
 
             var channel = this.channel;

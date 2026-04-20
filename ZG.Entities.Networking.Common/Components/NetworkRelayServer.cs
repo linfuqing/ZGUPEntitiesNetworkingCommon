@@ -148,7 +148,20 @@ namespace ZG
         {
             var identityIndex = sendBuffer.channelIndex;
             var identity = identities[identityIndex];
+            int source = identity.channel;
             identity.Disconnect(identities, ref sendBuffer);
+            int destination = identity.channel;
+            if (destination != source)
+            {
+                if (source != NetworkRelayServerIdentity.CHANNEL_NULL)
+                    NetworkRelayServerChannel.ElementAt(ref channels, source).Leave();
+
+                if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
+                    NetworkRelayServerChannel.ElementAt(ref channels, source).Join(out _);
+
+                __Modify(NetworkRelayServerModifier.Type.Leave, source, destination,
+                    sendBuffer.ID, ref sendBuffer);
+            }
             identities[identityIndex] = identity;
         }
 
@@ -536,7 +549,7 @@ namespace ZG
 
                 int length = matchDistances.Length, 
                     step = math.min((int)math.ceil((time - match.startTime) / match.value.distanceTime), 
-                        math.max(distanceIndex + 1, length - distanceIndex)), 
+                        length), 
                     x = distanceIndex, 
                     y = distanceIndex - 1, 
                     playerCount = 1, 
@@ -545,18 +558,9 @@ namespace ZG
                     temp;
                 for (int i = 0; i < step; ++i)
                 {
-                    if ((i & 1) == 0)
-                    {
-                        if (x < length)
-                            temp = x++;
-                        else
-                            continue;
-                    }
-                    else if(y < 0)
-                        continue;
-                    else
-                        temp = y--;
-                    
+                    if (!__StepDistanceIndex(i, length, ref x, ref y, out temp))
+                        break;
+
                     foreach (var distanceID in matchDistanceIDs.GetValuesForKey(matchDistances[temp]))
                     {
                         if (/*distanceID == id || */!__CanMatch(true, distanceID, out _, out channel))
@@ -603,17 +607,8 @@ namespace ZG
                 y = distanceIndex - 1;
                 for (int i = 0; i < step; ++i)
                 {
-                    if ((i & 1) == 0)
-                    {
-                        if (x < length)
-                            temp = x++;
-                        else
-                            continue;
-                    }
-                    else if(y < 0)
-                        continue;
-                    else
-                        temp = y--;
+                    if (!__StepDistanceIndex(i, length, ref x, ref y, out temp))
+                        break;
 
                     foreach (var distanceID in matchDistanceIDs.GetValuesForKey(matchDistances[temp]))
                     {
@@ -667,6 +662,38 @@ namespace ZG
                             break;
                     }
                 }
+            }
+
+            private bool __StepDistanceIndex(int i, int length, ref int x, ref int y, out int result)
+            {
+                if ((i & 1) == 0)
+                {
+                    if (x < length)
+                        result = x++;
+                    else if (y < 0)
+                    {
+                        result = -1;
+
+                        return false;
+                    }
+                    else
+                        result = y--;
+                }
+                else if (y < 0)
+                {
+                    if (x < length)
+                        result = x++;
+                    else
+                    {
+                        result = -1;
+
+                        return false;
+                    }
+                }
+                else
+                    result = y--;
+
+                return true;
             }
 
             private bool __CanMatch(bool isMain, uint id, out int identityIndex, out int channel)
@@ -885,9 +912,12 @@ namespace ZG
                                             channelIDs,
                                             ref sendBuffer))
                                     {
-                                        numModifiers += __Drop(i, modifier.destination, modifier.id, ref modifiers);
+                                        //numModifiers += __Drop(i, modifier.destination, modifier.id, ref modifiers);
 
                                         channel.Leave();
+
+                                        if (channel.count == 0)
+                                            identity.SetTemp();
                                     }
 
                                     channel.Create(math.max(channel.capacity,

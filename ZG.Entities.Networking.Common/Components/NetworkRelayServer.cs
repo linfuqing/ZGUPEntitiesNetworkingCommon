@@ -8,7 +8,7 @@ using Unity.Burst;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 
-[assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener>))]
+[assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener, NetworkRelayServerHandler>))]
 [assembly:RegisterGenericJobType(typeof(NetworkServerPopEventsJob<NetworkRelayServerHandler>))]
 
 namespace ZG

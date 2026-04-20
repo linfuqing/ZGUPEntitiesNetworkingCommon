@@ -42,9 +42,12 @@ namespace ZG
     }
 
     [BurstCompile]
-    public struct NetworkServerInitJob<T> : IJob where T : unmanaged, INetworkServerListener
+    public struct NetworkServerInitJob<TListener, THandler> : IJob 
+        where TListener : unmanaged, INetworkServerListener
+        where THandler : unmanaged, INetworkServerHandler
     {
-        public T listener;
+        public TListener listener;
+        public THandler handler;
         public NetworkDriver driver;
 
         public NetworkServerSendBuffer sendBuffer;
@@ -66,12 +69,19 @@ namespace ZG
             int connectionIndex, channelIndex;
             uint id;
             NetworkConnection connection, temp;
+            NetworkServerSendBuffer.Identity identity;
+            var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
             while ((connection = driver.Accept(out var payload)) != default)
             {
                 temp = connection;
                 id = sendBuffer.Connect(ref temp, payload);
                 if (id == 0)
                 {
+                    identity = new NetworkServerSendBuffer.Identity(sendBuffer.connectionIDs[temp],
+                        ref sendBufferParallelWriter);
+                    
+                    handler.Disconnect(ref identity);
+
                     if (NetworkConnection.State.Connected == driver.GetConnectionState(temp))
                     {
                         /*driver.Disconnect(connection);
@@ -287,8 +297,9 @@ namespace ZG
 
             var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
 
-            NetworkServerInitJob<TListener> init;
+            NetworkServerInitJob<TListener, THandler> init;
             init.listener = listener;
+            init.handler = handler;
             init.driver = __driver;
             init.sendBuffer = sendBuffer;
             init.connectionsToConnect = __connectionsToConnect;

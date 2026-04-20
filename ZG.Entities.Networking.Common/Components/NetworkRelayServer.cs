@@ -8,7 +8,7 @@ using Unity.Burst;
 using Unity.Collections.LowLevel.Unsafe;
 using Unity.Mathematics;
 
-[assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener, NetworkRelayServerHandler>))]
+[assembly:RegisterGenericJobType(typeof(NetworkServerInitJob<NetworkRelayServerListener>))]
 [assembly:RegisterGenericJobType(typeof(NetworkServerPopEventsJob<NetworkRelayServerHandler>))]
 
 namespace ZG
@@ -93,7 +93,13 @@ namespace ZG
 
         public NativeList<NetworkRelayServerMatch> matches;
 
-        public void Connect(in NetworkConnection connection, uint id, int connectionIndex, int channelIndex, NativeArray<byte> payload)
+        public NativeQueue<NetworkRelayServerModifier> modifiers;
+
+        public void Connect(uint id, 
+            int connectionIndex, 
+            int channelIndex, 
+            in NativeArray<byte> payload, 
+            ref NetworkServerSendBuffer sendBuffer)
         {
             if (channelIndex < identities.Length)
                 UnityEngine.Assertions.Assert.AreEqual(id, identities[channelIndex].ID);
@@ -109,9 +115,42 @@ namespace ZG
             }
         }
 
-        public void Disconnect(in NetworkConnection connection, uint id)
+        public void Disconnect(uint id, ref NetworkServerSendBuffer sendBuffer)
         {
             //identityIndices.Remove(connection);
+        }
+
+        public void Reconnect(uint id, ref NetworkServerSendBuffer sendBuffer)
+        {
+            var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
+            var sendBufferIdentity = new NetworkServerSendBuffer.Identity(id, ref sendBufferParallelWriter);
+            var identityIndex = sendBufferIdentity.channelIndex;
+            var identity = identities[identityIndex];
+            int source = identity.channel;
+            identity.Disconnect(identities.AsArray(), ref sendBufferIdentity);
+            int destination = identity.channel;
+            if (destination != source)
+            {
+                if (source != NetworkRelayServerIdentity.CHANNEL_NULL)
+                    channels.ElementAt(source).Leave();
+
+                if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
+                    channels.ElementAt(source).Join(out _);
+
+                __Modify(NetworkRelayServerModifier.Type.Leave, source, destination,
+                    id);
+            }
+            identities[identityIndex] = identity;
+        }
+        
+        private void __Modify(NetworkRelayServerModifier.Type type, int source, int destination, uint id)
+        {
+            NetworkRelayServerModifier modifier;
+            modifier.type = type;
+            modifier.source = source;
+            modifier.destination = destination;
+            modifier.id = id;
+            modifiers.Enqueue(modifier);
         }
     }
 
@@ -779,6 +818,8 @@ namespace ZG
                                 identities[modifier.destination] = identity;
                         }
                             continue;
+                        case NetworkRelayServerModifier.Type.Create:
+                        case NetworkRelayServerModifier.Type.Join:
                         case NetworkRelayServerModifier.Type.Leave:
                             if (sendBuffer.GetChannelIndex(modifier.id) == modifier.source)
                                 numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
@@ -1262,6 +1303,7 @@ namespace ZG
             listener.identities = __identities;
             listener.channels = __channels;
             listener.matches = __matches;
+            listener.modifiers = __modifiers;
 
             NetworkRelayServerHandler handler;
             handler.time = time;

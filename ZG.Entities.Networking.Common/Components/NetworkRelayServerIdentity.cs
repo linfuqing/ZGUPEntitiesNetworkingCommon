@@ -441,7 +441,7 @@ namespace ZG
             ref NetworkServerSendBuffer.Identity sendBuffer)
         {
             UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
-            if (channel == CHANNEL_NULL || !sendBuffer.AddChannel(ID, channel))
+            if (match != 0 || channel == CHANNEL_NULL || !sendBuffer.AddChannel(ID, channel))
                 return false;
 
             Leave(ref sendBuffer);

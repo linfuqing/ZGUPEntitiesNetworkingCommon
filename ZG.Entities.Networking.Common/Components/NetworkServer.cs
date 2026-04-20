@@ -21,9 +21,16 @@ namespace ZG
 
     public interface INetworkServerListener
     {
-        void Connect(in NetworkConnection connection, uint id, int connectionIndex, int channelIndex, NativeArray<byte> payload);
+        void Connect(
+            uint id, 
+            int connectionIndex, 
+            int channelIndex, 
+            in NativeArray<byte> payload, 
+            ref NetworkServerSendBuffer sendBuffer);
 
-        void Disconnect(in NetworkConnection connection, uint id);
+        void Disconnect(uint id, ref NetworkServerSendBuffer sendBuffer);
+        
+        void Reconnect(uint id, ref NetworkServerSendBuffer sendBuffer);
     }
     
     public interface INetworkServerHandler
@@ -42,12 +49,9 @@ namespace ZG
     }
 
     [BurstCompile]
-    public struct NetworkServerInitJob<TListener, THandler> : IJob 
-        where TListener : unmanaged, INetworkServerListener
-        where THandler : unmanaged, INetworkServerHandler
+    public struct NetworkServerInitJob<T> : IJob where T : unmanaged, INetworkServerListener
     {
-        public TListener listener;
-        public THandler handler;
+        public T listener;
         public NetworkDriver driver;
 
         public NetworkServerSendBuffer sendBuffer;
@@ -60,7 +64,7 @@ namespace ZG
             sendBuffer.Clear();
 
             foreach (var connectionToDisconnect in connectionsToDisconnect)
-                __Disconnect(connectionToDisconnect);
+                __Disconnect(false, connectionToDisconnect);
                 
             connectionsToDisconnect.Clear();
                 
@@ -69,19 +73,12 @@ namespace ZG
             int connectionIndex, channelIndex;
             uint id;
             NetworkConnection connection, temp;
-            NetworkServerSendBuffer.Identity identity;
-            var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
             while ((connection = driver.Accept(out var payload)) != default)
             {
                 temp = connection;
                 id = sendBuffer.Connect(ref temp, payload);
                 if (id == 0)
                 {
-                    identity = new NetworkServerSendBuffer.Identity(sendBuffer.connectionIDs[temp],
-                        ref sendBufferParallelWriter);
-                    
-                    handler.Disconnect(ref identity);
-
                     if (NetworkConnection.State.Connected == driver.GetConnectionState(temp))
                     {
                         /*driver.Disconnect(connection);
@@ -91,7 +88,7 @@ namespace ZG
                         driver.Disconnect(temp);
                     }
                     
-                    __Disconnect(temp);
+                    __Disconnect(true, temp);
                     
                     temp = connection;
                     id = sendBuffer.Connect(ref temp, payload);
@@ -109,17 +106,21 @@ namespace ZG
 
                 sendBuffer.AsReadOnly().GetConnection(id, out connectionIndex, out channelIndex, out _);
 
-                listener.Connect(connection, id, connectionIndex, channelIndex, payload);
+                listener.Connect(id, connectionIndex, channelIndex, payload, ref sendBuffer);
             }
 
             connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, sendBuffer.connections.Length);
         }
         
-        private void __Disconnect(in NetworkConnection connection)
+        private void __Disconnect(bool isConnected, in NetworkConnection connection)
         {
-            uint id = sendBuffer.Disconnect(connection);
-                
-            listener.Disconnect(connection, id);
+            uint id = sendBuffer.connectionIDs[connection];
+            if(isConnected)
+                listener.Reconnect(id, ref sendBuffer);
+            else
+                listener.Disconnect(id, ref sendBuffer);
+            
+            sendBuffer.Disconnect(connection);
         }
     }
 
@@ -297,9 +298,8 @@ namespace ZG
 
             var sendBufferParallelWriter = sendBuffer.AsParallelWriter();
 
-            NetworkServerInitJob<TListener, THandler> init;
+            NetworkServerInitJob<TListener> init;
             init.listener = listener;
-            init.handler = handler;
             init.driver = __driver;
             init.sendBuffer = sendBuffer;
             init.connectionsToConnect = __connectionsToConnect;

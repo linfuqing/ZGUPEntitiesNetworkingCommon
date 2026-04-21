@@ -131,6 +131,8 @@ namespace ZG
             int channel = this.channel;
             if (channel != CHANNEL_NULL)
             {
+                UnityEngine.Assertions.Assert.AreEqual(channel, identities[sendBuffer.GetChannelIndex(id)].channel);
+                
                 var channelFlag = this.channelFlag;
                 if (sendBuffer.BeginWrite(channel, out writer))
                 {
@@ -180,6 +182,8 @@ namespace ZG
             int channel = this.channel;
             if (channel != CHANNEL_NULL)
             {
+                UnityEngine.Assertions.Assert.AreEqual(channel, identities[sendBuffer.GetChannelIndex(id)].channel);
+
                 if (sendBuffer.BeginWrite(channel, out var writer))
                 {
                     __WriteID((int)NetworkRelayMessageType.Disconnect, ref writer);
@@ -484,7 +488,8 @@ namespace ZG
             
             UnityEngine.Debug.Log($"[DropOrLeave]{(NetworkRelayMessageType)type} {ID} to {id} in {channel}");
 
-            //UnityEngine.Assertions.Assert.AreEqual(ID, sendBuffer.ID);
+            UnityEngine.Assertions.Assert.IsTrue(sendBuffer.ContainsChannel(id, channel));
+            
             if (sendBuffer.RemoveChannel(ID, channel))
             {
                 SendHeader(type, id, ref sendBuffer);

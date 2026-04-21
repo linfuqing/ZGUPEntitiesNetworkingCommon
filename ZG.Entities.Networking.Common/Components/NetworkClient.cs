@@ -300,7 +300,9 @@ namespace ZG
             }
         }
 
+#if !DEBUG
         [BurstCompile]
+#endif
         private struct PopEvents : IJob
         {
             public float reconnectionTime;
@@ -328,7 +330,7 @@ namespace ZG
                                 return;
                             case NetworkConnection.State.Disconnected:
                                 header.connection = driver.Connect(header.endpoint,
-                                    this.headers.GetSubArray(headerSize, headers.Length - headerSize));
+                                    this.headers.GetSubArray(headerSize, this.headers.Length - headerSize));
 
                                 break;
                         }

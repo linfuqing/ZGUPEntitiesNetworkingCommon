@@ -11,6 +11,8 @@ public interface INetworkServerSendBuffer
 
     NativeArray<byte> GetPayload(uint id);
 
+    bool ContainsChannel(uint id, int value);
+
     bool AddChannel(uint id, int value);
 
     bool RemoveChannel(uint id, int value);
@@ -122,6 +124,11 @@ public struct NetworkServerSendBuffer
             return result;
         }
 
+        public bool Contains(int value)
+        {
+            return __values.Contains(value);
+        }
+
         public bool Add(int value)
         {
             if (__values.Contains(value))
@@ -203,6 +210,14 @@ public struct NetworkServerSendBuffer
         public int GetChannelIndex(uint id) => __connectionIndices.TryGetValue(id, out var connectionIndex)
             ? connectionIndex.channelIndex
             : -1;
+
+        public bool ContainsChannel(uint id, int value)
+        {
+            int channelIndex = GetChannelIndex(id);
+            var channel = __channels[channelIndex];
+
+            return channel.Contains(value);
+        }
 
         public bool AddChannel(uint id, int value)
         {
@@ -341,6 +356,8 @@ public struct NetworkServerSendBuffer
 
         public int GetChannelIndex(uint id) => __core.GetChannelIndex(id);
 
+        public bool ContainsChannel(uint id, int value) => __core.ContainsChannel(id, value);
+
         public bool AddChannel(uint id, int value) => __core.AddChannel(id, value);
 
         public bool RemoveChannel(uint id, int value) => __core.RemoveChannel(id, value);
@@ -386,6 +403,8 @@ public struct NetworkServerSendBuffer
         public int GetConnectionIndex(uint id) => __core.GetConnectionIndex(id);
 
         public int GetChannelIndex(uint id) => __core.GetChannelIndex(id);
+
+        public bool ContainsChannel(uint id, int value) => __core.ContainsChannel(id, value);
 
         public bool AddChannel(uint id, int value) => __core.AddChannel(id, value);
 
@@ -434,6 +453,8 @@ public struct NetworkServerSendBuffer
         {
             return __writer.GetPayload(id);
         }
+
+        public bool ContainsChannel(uint id, int value) => __writer.ContainsChannel(id, value);
 
         public bool AddChannel(uint id, int value)
         {
@@ -501,6 +522,8 @@ public struct NetworkServerSendBuffer
         {
             return __writer.GetPayload(id);
         }
+
+        public bool ContainsChannel(uint id, int value) => __writer.ContainsChannel(id, value);
 
         public bool AddChannel(uint id, int value)
         {

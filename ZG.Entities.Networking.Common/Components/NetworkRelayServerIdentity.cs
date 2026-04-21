@@ -203,8 +203,8 @@ namespace ZG
 
             isOnline = false;
             
-            if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
-                Leave(id, ref sendBuffer);
+            /*if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
+                Leave(id, ref sendBuffer);*/
         }
 
         public bool AddFriend<T>(uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer

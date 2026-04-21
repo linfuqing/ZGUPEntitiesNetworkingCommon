@@ -189,6 +189,7 @@ namespace ZG
         {
             public NetworkConnection connection;
             public NetworkEndpoint endpoint;
+            public double disconnectionTime;
         }
 
         public struct Message : IComparable<Message>
@@ -302,6 +303,8 @@ namespace ZG
         [BurstCompile]
         private struct PopEvents : IJob
         {
+            public float reconnectionTime;
+            public double time;
             public NetworkDriver driver;
             public NetworkClientSendBuffer sendBuffer;
             public NativeList<byte> buffer;
@@ -311,7 +314,32 @@ namespace ZG
             public void Execute()
             {
                 int headerSize = UnsafeUtility.SizeOf<Header>();
-                var header = headers.Length < headerSize ? default : headers.GetSubArray(0, headerSize).Reinterpret<Header>(1)[0];
+                var headers = this.headers.Length < headerSize
+                    ? default
+                    : this.headers.GetSubArray(0, headerSize).Reinterpret<Header>(1);
+                var header = headers.IsCreated ? headers[0] : default;
+                if (header.disconnectionTime > math.DBL_MIN_NORMAL)
+                {
+                    if (time - header.disconnectionTime > reconnectionTime)
+                    {
+                        switch (driver.GetConnectionState(header.connection))
+                        {
+                            case NetworkConnection.State.Disconnecting:
+                                return;
+                            case NetworkConnection.State.Disconnected:
+                                header.connection = driver.Connect(header.endpoint,
+                                    this.headers.GetSubArray(headerSize, headers.Length - headerSize));
+
+                                break;
+                        }
+
+                        header.disconnectionTime = 0.0;
+
+                        headers[0] = header;
+                    }
+
+                    return;
+                }
 
                 buffer.Clear();
 
@@ -364,13 +392,16 @@ namespace ZG
                             var disconnectReason = (DisconnectReason)stream.ReadByte();
                             __LogDisconnectReason(disconnectReason);
 
-                            driver.Disconnect(header.connection);
+                            header.disconnectionTime = time;
+                            headers[0] = header;
+
+                            /*driver.Disconnect(header.connection);
                             
                             header.connection = driver.Connect(header.endpoint, headers.GetSubArray(headerSize, headers.Length - headerSize));
 
                             var connections = headers.GetSubArray(0, UnsafeUtility.SizeOf<NetworkConnection>())
                                 .Reinterpret<NetworkConnection>(1);
-                            connections[0] = header.connection;
+                            connections[0] = header.connection;*/
                     
                             message.type = NetworkClientMessageType.Disconnect;
                             message.offset = buffer.Length;
@@ -395,6 +426,8 @@ namespace ZG
             }
         }
 
+        public readonly float ReconnectionTime;
+
         private NetworkDriver __driver;
         private NativeList<byte> __headers;
         private NativeList<byte> __buffer;
@@ -416,8 +449,10 @@ namespace ZG
         
         public NativeList<byte> buffer => __buffer;
 
-        public NetworkClient(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
+        public NetworkClient(NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
+            ReconnectionTime = settings.GetNetworkConfigParameters().reconnectionTimeoutMS * 0.001f;
+            
             __driver = NetworkDriver.Create(settings);
             __headers = new NativeList<byte>(allocator);
             __buffer = new NativeList<byte>(allocator);
@@ -457,6 +492,7 @@ namespace ZG
             Header header;
             header.connection = __driver.Connect(endPoint, payload);
             header.endpoint = endPoint;
+            header.disconnectionTime = 0.0;
             temp[0] = header;
             
             if(headersSize > 0)
@@ -507,6 +543,7 @@ namespace ZG
         }
 
         public JobHandle Schedule(
+            double time, 
             ref NetworkClientSendBuffer sendBuffer, 
             in JobHandle inputDeps)
         {
@@ -528,6 +565,8 @@ namespace ZG
             jobHandle = __driver.ScheduleUpdate(jobHandle);
 
             PopEvents popEvents;
+            popEvents.reconnectionTime = ReconnectionTime;
+            popEvents.time = time;
             popEvents.driver = __driver;
             popEvents.sendBuffer = sendBuffer;
             popEvents.buffer = __buffer;
@@ -619,9 +658,9 @@ namespace ZG
             return __sendBuffer.CreatePipeline(pipeline);
         }
 
-        public JobHandle Schedule(in JobHandle inputDeps)
+        public JobHandle Schedule(double time, in JobHandle inputDeps)
         {
-            return __instance.Schedule(ref __sendBuffer, inputDeps);
+            return __instance.Schedule(time, ref __sendBuffer, inputDeps);
         }
     }
 }

@@ -829,8 +829,18 @@ namespace ZG
                         case NetworkRelayServerModifier.Type.Create:
                         case NetworkRelayServerModifier.Type.Join:
                         case NetworkRelayServerModifier.Type.Leave:
-                            if (sendBuffer.GetChannelIndex(modifier.id) == modifier.source)
-                                numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
+                            if (modifier.source != NetworkRelayServerIdentity.CHANNEL_NULL)
+                            {
+                                if (sendBuffer.GetChannelIndex(modifier.id) == modifier.source)
+                                    numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
+                                else
+                                {
+                                    ref var channel = ref channels.ElementAt(modifier.source);
+                                    if (channel.count == 1)
+                                        numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
+                                }
+                            }
+
                             break;
                         case NetworkRelayServerModifier.Type.Drop:
                         {
@@ -842,6 +852,12 @@ namespace ZG
 
                             if (identityIndex == modifier.source)
                                 numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
+                            else
+                            {
+                                ref var channel = ref channels.ElementAt(modifier.source);
+                                if(channel.count == 1)
+                                    numModifiers += __Drop(i, modifier.source, modifier.id, ref modifiers);
+                            }
                         }
                             break;
                         case NetworkRelayServerModifier.Type.Matching:

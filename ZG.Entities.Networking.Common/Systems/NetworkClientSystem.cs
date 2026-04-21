@@ -19,7 +19,7 @@ namespace ZG
         public void OnUpdate(ref SystemState state)
         {
             var driver = SystemAPI.GetSingleton<NetworkClientDriver>();
-            state.Dependency = driver.Schedule(state.Dependency);
+            state.Dependency = driver.Schedule(SystemAPI.Time.ElapsedTime, state.Dependency);
             
             SystemAPI.SetSingleton(driver);
         }

@@ -74,7 +74,7 @@ namespace ZG
         public bool Join(out int slot)
         {
             slot = Interlocked.Decrement(ref __slot);
-            if (slot < 0)
+            if (slot < 0 || slot + 1 == capacity)
             {
                 Interlocked.Increment(ref  __slot);
 
@@ -631,12 +631,17 @@ namespace ZG
                             if (channelID == id || !__CanMatch(false, channelID, out _, out _))
                                 continue;
 
-                            if (++channelPlayerCount + playerCount >= match.value.playerCount)
+                            if (++channelPlayerCount + playerCount > match.value.playerCount)
                                 break;
                         }
 
                         if (channelPlayerCount > 0)
+                        {
+                            if(channelPlayerCount + playerCount > match.value.playerCount)
+                                continue;
+                            
                             playerCount += channelPlayerCount;
+                        }
                         else if(distanceID != id)
                             ++playerCount;
                         
@@ -680,12 +685,15 @@ namespace ZG
                             if (channelID == id || !__CanMatch(false, channelID, out _, out _))
                                 continue;
 
-                            ++channelPlayerCount;
-                            break;
+                            if (++channelPlayerCount + playerCount > match.value.playerCount)
+                                break;
                         }
 
                         if (channelPlayerCount > 0)
                         {
+                            if(channelPlayerCount + playerCount > match.value.playerCount)
+                                continue;
+
                             channelPlayerCount = 0;
                             foreach (uint channelID in channelIDs.GetValuesForKey(channel))
                             {
@@ -981,60 +989,63 @@ namespace ZG
                             if (NetworkRelayServerModifier.Type.Match == modifier.type)
                             {
                                 var temp = this.matches[modifier.destination];
-                                identity.Match(temp.index, temp.value.distance, sendBuffer.ID, ref sendBuffer);
-
-                                modifier.source = identity.channel;
-
-                                ref var channel = ref channels.ElementAt(modifier.destination);
-                                if (modifier.destination == identityIndex)
+                                if (modifier.destination != identityIndex || temp.index == identity.match)
                                 {
-                                    if (!identity.Create( //channelModifier.destination, 
-                                            true,
-                                            sendBuffer.ID, 
-                                            identities.AsArray(),
-                                            channelIDs,
-                                            ref sendBuffer))
+                                    identity.Match(temp.index, temp.value.distance, sendBuffer.ID, ref sendBuffer);
+
+                                    modifier.source = identity.channel;
+
+                                    ref var channel = ref channels.ElementAt(modifier.destination);
+                                    if (modifier.destination == identityIndex)
                                     {
-                                        //numModifiers += __Drop(i, modifier.destination, modifier.id, ref modifiers);
+                                        if (!identity.Create( //channelModifier.destination, 
+                                                true,
+                                                sendBuffer.ID,
+                                                identities.AsArray(),
+                                                channelIDs,
+                                                ref sendBuffer))
+                                        {
+                                            //numModifiers += __Drop(i, modifier.destination, modifier.id, ref modifiers);
 
-                                        channel.Leave();
+                                            channel.Leave();
 
-                                        if (channel.count == 0)
-                                            identity.SetTemp();
+                                            if (channel.count == 0)
+                                                identity.SetTemp();
+                                        }
+
+                                        channel.Create(math.max(channel.capacity,
+                                            this.matches[modifier.destination].value.playerCount));
+                                    }
+                                    else if (channel.Join(out _))
+                                    {
+                                        if (!identity.Join(true,
+                                                modifier.destination,
+                                                sendBuffer.ID,
+                                                identities.AsArray(),
+                                                channelIDs,
+                                                ref sendBuffer))
+                                            channel.Leave();
                                     }
 
-                                    channel.Create(math.max(channel.capacity,
-                                        this.matches[modifier.destination].value.playerCount));
-                                }
-                                else if (channel.Join(out _))
-                                {
-                                    if (!identity.Join(true,
-                                            modifier.destination,
-                                            sendBuffer.ID, 
-                                            identities.AsArray(),
-                                            channelIDs,
-                                            ref sendBuffer))
-                                        channel.Leave();
-                                }
+                                    identities[identityIndex] = identity;
 
-                                identities[identityIndex] = identity;
-
-                                modifier.destination = identity.channel;
-                                if (modifier.destination == modifier.source)
-                                    continue;
-
-                                if (modifier.source != NetworkRelayServerIdentity.CHANNEL_NULL)
-                                    channels.ElementAt(modifier.source).Leave();
-
-                                foreach (var channelID in channelIDs.GetValuesForKey(modifier.destination))
-                                {
-                                    if (channelID == sendBuffer.ID)
+                                    modifier.destination = identity.channel;
+                                    if (modifier.destination == modifier.source)
                                         continue;
 
-                                    identities[sendBuffer.GetChannelIndex(channelID)].SendHeader(
-                                        (int)NetworkRelayMessageType.Join,
-                                        sendBuffer.ID, 
-                                        ref sendBuffer);
+                                    if (modifier.source != NetworkRelayServerIdentity.CHANNEL_NULL)
+                                        channels.ElementAt(modifier.source).Leave();
+
+                                    foreach (var channelID in channelIDs.GetValuesForKey(modifier.destination))
+                                    {
+                                        if (channelID == sendBuffer.ID)
+                                            continue;
+
+                                        identities[sendBuffer.GetChannelIndex(channelID)].SendHeader(
+                                            (int)NetworkRelayMessageType.Join,
+                                            sendBuffer.ID,
+                                            ref sendBuffer);
+                                    }
                                 }
                             }
                             else

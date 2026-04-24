@@ -376,7 +376,9 @@ namespace ZG
             uint id, 
             ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            return __DropOrLeave((int)NetworkRelayMessageType.Drop, id, ref sendBuffer);
+            var type = (channelFlag & NetworkRelayChannelFlag.Creator) == NetworkRelayChannelFlag.Creator
+                ? NetworkRelayMessageType.Leave : NetworkRelayMessageType.Drop;
+            return __DropOrLeave((int)type, id, ref sendBuffer);
         }
 
         public bool Matching<T>(int value, uint id, ref T sendBuffer) where T : struct, INetworkServerSendBuffer

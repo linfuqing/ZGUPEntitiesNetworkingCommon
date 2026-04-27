@@ -179,6 +179,8 @@ namespace ZG
             in NativeArray<NetworkRelayServerIdentity> identities, 
             ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
+            isOnline = false;
+
             int channel = this.channel;
             if (channel != CHANNEL_NULL)
             {
@@ -205,8 +207,6 @@ namespace ZG
                 }
             }
 
-            isOnline = false;
-            
             /*if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
                 Leave(id, ref sendBuffer);*/
         }
@@ -273,11 +273,9 @@ namespace ZG
                 sendBuffer.EndWrite(writer);
             }
             
-            NetworkRelayServerIdentity identity;
             foreach (var friendID in __friendIDs)
             {
-                identity = identities[sendBuffer.GetChannelIndex(friendID)];
-                if (identity.channel == channel)
+                if (CHANNEL_NULL != channel && identities[sendBuffer.GetChannelIndex(friendID)].channel == channel)
                     continue;
                 
                 if (sendBuffer.BeginWrite(friendID, out writer))

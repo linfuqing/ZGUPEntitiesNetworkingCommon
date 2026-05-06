@@ -810,6 +810,9 @@ public struct NetworkServerSendBuffer
 
     public uint Connect(ref NetworkConnection connection, in NativeArray<byte> payload)
     {
+        if (!payload.IsCreated || payload.Length < 4)
+            return 0;
+        
         uint id = new DataStreamReader(payload).ReadPackedUInt(StreamCompressionModel.Default);
         var allocator = this.allocator;
         if (__connectionIndices.TryGetValue(id, out var connectionIndex))

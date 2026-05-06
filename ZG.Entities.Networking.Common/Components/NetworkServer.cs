@@ -235,6 +235,8 @@ namespace ZG
         private NativeList<NetworkConnection> __connectionsToConnect;
         private NativeList<NetworkConnection> __connectionsToDisconnect;
 
+        public bool isCreated => __driver.IsCreated;
+
         public NetworkServer(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
             __driver = NetworkDriver.Create(settings);

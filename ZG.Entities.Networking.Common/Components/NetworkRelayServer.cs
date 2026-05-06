@@ -1263,6 +1263,14 @@ namespace ZG
 
         private NativeQueue<NetworkRelayServerModifier> __modifiers;
 
+        public bool isCreated => __instance.isCreated;
+
+        public int connectionCount => __sendBuffer.connections.Length;
+        
+        public int channelCount => __channelIDs.Count();
+
+        public int matchCount => __matchIDs.Length;
+        
         public NetworkRelayServer(
             in NetworkSettings settings,
             in NativeArray<NetworkPipelineStageId> stages,

@@ -38,30 +38,65 @@ namespace ZG
         };
 
         private NetworkRelayServer __instance;
+        
+        private static Entity __entity;
 
+        public static NetworkRelayServer server
+        {
+            get
+            {
+                if (__entity == Entity.Null)
+                    return default;
+                
+                return World.DefaultGameObjectInjectionWorld.EntityManager.GetComponentData<NetworkRelayServer>(__entity);
+            }
+        }
+
+        public static bool GetServerStatus(out int connectionCount, out int channelCount, out int matchCount)
+        {
+            var server = NetworkRelayServerManager.server;
+            if (server.isCreated)
+            {
+                connectionCount = server.connectionCount;
+                channelCount = server.channelCount;
+                matchCount = server.matchCount;
+
+                return true;
+            }
+            
+            connectionCount = 0;
+            channelCount = 0;
+            matchCount = 0;
+
+            return false;
+        }
+        
         void Start()
         {
-            var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
-            var entity = entityManager.CreateSingleton<NetworkRelayServer>();
+            if (__entity == Entity.Null)
+            {
+                var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
+                __entity = entityManager.CreateSingleton<NetworkRelayServer>();
 
-            using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
-                __instance = new NetworkRelayServer(
-                    stages,
-                    Allocator.Persistent,
-                    _connectTimeoutMS,
-                    _maxConnectAttempts,
-                    _disconnectTimeoutMS,
-                    _heartbeatTimeoutMS, 
-                    _reconnectionTimeoutMS,
-                    //_maxFrameTimeMS,
-                    Mathf.CeilToInt(Time.maximumDeltaTime * 1000), 
-                    _fixedFrameTimeMS,
-                    _receiveQueueCapacity,
-                    _sendQueueCapacity);
+                using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
+                    __instance = new NetworkRelayServer(
+                        stages,
+                        Allocator.Persistent,
+                        _connectTimeoutMS,
+                        _maxConnectAttempts,
+                        _disconnectTimeoutMS,
+                        _heartbeatTimeoutMS,
+                        _reconnectionTimeoutMS,
+                        //_maxFrameTimeMS,
+                        Mathf.CeilToInt(Time.maximumDeltaTime * 1000),
+                        _fixedFrameTimeMS,
+                        _receiveQueueCapacity,
+                        _sendQueueCapacity);
 
-            __instance.Listen(_port, _family);
-            
-            entityManager.SetComponentData(entity, __instance);
+                __instance.Listen(_port, _family);
+
+                entityManager.SetComponentData(__entity, __instance);
+            }
         }
 
         void OnDestroy()

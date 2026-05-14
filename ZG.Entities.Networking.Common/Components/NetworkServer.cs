@@ -10,15 +10,6 @@ using Unity.Networking.Transport.Error;
 
 namespace ZG
 {
-    public enum NetworkServerPipelineType
-    {
-        SendSelfFromOthers, 
-        Custom, 
-        SendOthers, 
-        SendOthersFromChannel,
-        SendSelf
-    }
-
     public interface INetworkServerListener
     {
         void Connect(
@@ -52,7 +43,7 @@ namespace ZG
     public struct NetworkServerInitJob<T> : IJob where T : unmanaged, INetworkServerListener
     {
         public T listener;
-        public NetworkDriver driver;
+        public MultiNetworkDriver driver;
 
         public NetworkServerSendBuffer sendBuffer;
 
@@ -129,7 +120,7 @@ namespace ZG
     public struct NetworkServerPopEventsJob<T> : IJobParallelForDefer where T : unmanaged, INetworkServerHandler
     {
         public T handler;
-        public NetworkDriver.Concurrent driver;
+        public MultiNetworkDriver.Concurrent driver;
         public NetworkServerSendBuffer.ParallelWriter sendBuffer;
 
         public NativeList<NetworkConnection>.ParallelWriter connectionsToDisconnect;
@@ -221,7 +212,7 @@ namespace ZG
             [ReadOnly]
             public NativeArray<NetworkConnection> connections;
 
-            public NetworkDriver.Concurrent driver;
+            public MultiNetworkDriver.Concurrent driver;
 
             public NetworkServerSendBuffer.Sender sender;
 
@@ -231,7 +222,9 @@ namespace ZG
             }
         }
 
-        private NetworkDriver __driver;
+        private NetworkDriver __udpDriver;
+        private NetworkDriver __wsDriver;
+        private MultiNetworkDriver __driver;
         private NativeList<NetworkConnection> __connectionsToConnect;
         private NativeList<NetworkConnection> __connectionsToDisconnect;
 
@@ -239,7 +232,11 @@ namespace ZG
 
         public NetworkServer(in NetworkSettings settings, in AllocatorManager.AllocatorHandle allocator)
         {
-            __driver = NetworkDriver.Create(settings);
+            __udpDriver = NetworkDriver.Create(settings);
+            __wsDriver = NetworkDriver.Create(new WebSocketNetworkInterface(), settings);
+            __driver = MultiNetworkDriver.Create();
+            __driver.AddDriver(__udpDriver);
+            __driver.AddDriver(__wsDriver);
 
             __connectionsToConnect = new NativeList<NetworkConnection>(allocator);
             __connectionsToDisconnect = new NativeList<NetworkConnection>(allocator);
@@ -257,7 +254,7 @@ namespace ZG
             return __driver.CreatePipeline(stages);
         }
 
-        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        public void Listen(ushort udpPort, ushort wsPort, NetworkFamily family = NetworkFamily.Ipv4)
         {
             NetworkEndpoint endpoint;
             switch(family)
@@ -273,9 +270,13 @@ namespace ZG
                     break;
             }
 
-            endpoint.Port = port;
-            if (__driver.Bind(endpoint) != 0 || __driver.Listen() != 0)
-                UnityEngine.Debug.LogError($"Failed to bind to port {port}");
+            endpoint.Port = udpPort;
+            if (__udpDriver.Bind(endpoint) != 0 || __udpDriver.Listen() != 0)
+                UnityEngine.Debug.LogError($"Failed to bind to port {udpPort}");
+            
+            endpoint.Port = wsPort;
+            if (__wsDriver.Bind(endpoint) != 0 || __wsDriver.Listen() != 0)
+                UnityEngine.Debug.LogError($"Failed to bind to port {wsPort}");
         }
 
         public void Disconnect(in NetworkConnection connection)

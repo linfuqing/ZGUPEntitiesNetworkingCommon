@@ -6,8 +6,46 @@ using Unity.Networking.Transport.Error;
 
 namespace ZG
 {
+    public interface INetworkDriver
+    {
+        int BeginSend(NetworkPipeline pipe, NetworkConnection connection, out DataStreamWriter writer,
+            int requiredPayloadSize = 0);
+
+        int EndSend(DataStreamWriter writer);
+    }
+    
     public struct NetworkSendBuffer
     {
+        private struct DriverWrapper : INetworkDriver
+        {
+            private NetworkDriver.Concurrent __instance;
+
+            public DriverWrapper(ref NetworkDriver.Concurrent instance)
+            {
+                __instance = instance;
+            }
+            
+            public int BeginSend(NetworkPipeline pipe, NetworkConnection connection, out DataStreamWriter writer,
+                int requiredPayloadSize = 0) => __instance.BeginSend(pipe, connection, out writer, requiredPayloadSize);
+            
+            public int EndSend(DataStreamWriter writer) => __instance.EndSend(writer);
+        }
+        
+        private struct MultiDriverWrapper : INetworkDriver
+        {
+            private MultiNetworkDriver.Concurrent __instance;
+            
+            public MultiDriverWrapper(ref MultiNetworkDriver.Concurrent instance)
+            {
+                __instance = instance;
+            }
+
+            public int BeginSend(NetworkPipeline pipe, NetworkConnection connection, out DataStreamWriter writer,
+                int requiredPayloadSize = 0) => __instance.BeginSend(pipe, connection, out writer, requiredPayloadSize);
+            
+            public int EndSend(DataStreamWriter writer) => __instance.EndSend(writer);
+        }
+        
         private UnsafeList<int> __sizes;
         private UnsafeList<byte> __bytes;
         
@@ -50,11 +88,11 @@ namespace ZG
             }
         }
 
-        public bool Apply(
+        public bool Apply<T>(
             in NetworkConnection connection,
             in NetworkPipeline pipeline,
-            ref NetworkDriver.Concurrent driver, 
-            ref int index)
+            ref T driver, 
+            ref int index) where T : struct, INetworkDriver
         {
             int length = __sizes.Length, count, byteOffset, result;
             StatusCode statusCode;
@@ -106,6 +144,34 @@ namespace ZG
             return true;
         }
 
+        public bool Apply(
+            in NetworkConnection connection,
+            in NetworkPipeline pipeline,
+            ref MultiNetworkDriver.Concurrent driver,
+            ref int index)
+        {
+            var wrapper = new MultiDriverWrapper(ref driver);
+            return Apply(
+                connection,
+                pipeline,
+                ref wrapper,
+                ref index);
+        }
+
+        public bool Apply(
+            in NetworkConnection connection,
+            in NetworkPipeline pipeline,
+            ref NetworkDriver.Concurrent driver,
+            ref int index)
+        {
+            var wrapper = new DriverWrapper(ref driver);
+            return Apply(
+                connection,
+                pipeline,
+                ref wrapper,
+                ref index);
+        }
+        
         public bool ReadNext(ref int index, out NativeArray<byte> bytes)
         {
             if (index >= __sizes.Length)

@@ -127,6 +127,10 @@ namespace ZG
             var identity = identities[identityIndex];
             int source = identity.channel;
             identity.Disconnect(sendBufferIdentity.ID, identities.AsArray(), ref sendBufferIdentity);
+            
+            if (source != NetworkRelayServerIdentity.CHANNEL_NULL && channels.ElementAt(source).count == 1)
+                identity.Leave(sendBufferIdentity.ID, ref sendBufferIdentity);
+            
             int destination = identity.channel;
             if (destination != source)
             {
@@ -134,7 +138,7 @@ namespace ZG
                     channels.ElementAt(source).Leave();
 
                 if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
-                    channels.ElementAt(source).Join(out _);
+                    channels.ElementAt(destination).Join(out _);
 
                 __Modify(
                     destination == NetworkRelayServerIdentity.CHANNEL_NULL
@@ -193,6 +197,10 @@ namespace ZG
             var identity = identities[identityIndex];
             int source = identity.channel;
             identity.Disconnect(sendBuffer.ID, identities, ref sendBuffer);
+            
+            if (source != NetworkRelayServerIdentity.CHANNEL_NULL && NetworkRelayServerChannel.ElementAt(ref channels, source).count == 1)
+                identity.Leave(sendBuffer.ID, ref sendBuffer);
+
             int destination = identity.channel;
             if (destination != source)
             {
@@ -200,11 +208,12 @@ namespace ZG
                     NetworkRelayServerChannel.ElementAt(ref channels, source).Leave();
 
                 if (destination != NetworkRelayServerIdentity.CHANNEL_NULL)
-                    NetworkRelayServerChannel.ElementAt(ref channels, source).Join(out _);
+                    NetworkRelayServerChannel.ElementAt(ref channels, destination).Join(out _);
 
                 __Modify(NetworkRelayServerModifier.Type.Leave, source, destination,
                     sendBuffer.ID, ref sendBuffer);
             }
+            
             identities[identityIndex] = identity;
         }
 
@@ -222,8 +231,10 @@ namespace ZG
 
                         int source = identity.channel;
                         if (identity.SetStatus(
-                                reader.ReadPackedInt(streamCompressionModel), 
-                                sendBuffer.ID, 
+                                source != NetworkRelayServerIdentity.CHANNEL_NULL &&
+                                NetworkRelayServerChannel.ElementAt(ref channels, source).count == 1,
+                                reader.ReadPackedInt(streamCompressionModel),
+                                sendBuffer.ID,
                                 identities,
                                 ref sendBuffer))
                         {
@@ -1347,9 +1358,9 @@ namespace ZG
             __modifiers.Dispose();
         }
 
-        public void Listen(ushort port, NetworkFamily family = NetworkFamily.Ipv4)
+        public void Listen(ushort udpPort, ushort wsPort, NetworkFamily family = NetworkFamily.Ipv4)
         {
-            __instance.Listen(port, family);
+            __instance.Listen(udpPort, wsPort, family);
         }
 
         public void Disconnect(in NetworkConnection connection)

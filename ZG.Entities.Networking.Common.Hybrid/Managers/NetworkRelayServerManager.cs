@@ -27,7 +27,9 @@ namespace ZG
         [SerializeField]
         internal int _sendQueueCapacity = 4096;// SendQueueCapacity;
         [SerializeField]
-        internal ushort _port = 1386;
+        internal ushort _udpPort = 1386;
+        [SerializeField]
+        internal ushort _wsPort = 1387;
         [SerializeField] 
         internal NetworkFamily _family = NetworkFamily.Ipv4;
         [SerializeField] 
@@ -93,7 +95,7 @@ namespace ZG
                         _receiveQueueCapacity,
                         _sendQueueCapacity);
 
-                __instance.Listen(_port, _family);
+                __instance.Listen(_udpPort, _wsPort, _family);
 
                 entityManager.SetComponentData(__entity, __instance);
             }

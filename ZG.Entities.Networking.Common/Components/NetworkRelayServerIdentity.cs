@@ -247,6 +247,7 @@ namespace ZG
         }
         
         public bool SetStatus<T>(
+            bool canLeaveToChange, 
             int value, 
             uint id, 
             in NativeArray<NetworkRelayServerIdentity> identities, 
@@ -257,7 +258,8 @@ namespace ZG
             if (channelStatus == value)
                 return false;
 
-            if (value == 0 && (this.channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
+            if (canLeaveToChange || value == 0 &&
+                (this.channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
                 Leave(id, ref sendBuffer);
 
             var channelFlag = this.channelFlag;

@@ -597,7 +597,7 @@ public struct NetworkServerSendBuffer
 
         public void Send(in NetworkConnection connection,
             in NetworkPipeline pipeline, 
-            ref NetworkDriver.Concurrent driver)
+            ref MultiNetworkDriver.Concurrent driver)
         {
             uint id = __connectionIDs[connection];
             var connectionIndex = __connectionIndices[id];

@@ -12,9 +12,8 @@ using Unity.Networking.Transport.Error;
 namespace ZG
 {
     
-    public struct NetworkDelaySocket
+    /*public struct NetworkDelaySocket
     {
-        public struct 
         public int Create(in FixedString512Bytes address)
         {
             
@@ -39,7 +38,7 @@ namespace ZG
         {
             
         }
-    }
+    }*/
 
     public struct NetworkInterface : INetworkInterface
     {

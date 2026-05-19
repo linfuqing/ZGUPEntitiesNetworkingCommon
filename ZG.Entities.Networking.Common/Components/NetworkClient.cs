@@ -455,12 +455,12 @@ namespace ZG
         {
             ReconnectionTime = settings.GetNetworkConfigParameters().reconnectionTimeoutMS * 0.001f;
             
-#if UNITY_WEBGL && !UNITY_EDITOR
-            __driver = NetworkDriver.Create(new WebSocketNetworkInterface()/*, settings*/);
+/*#if UNITY_WEBGL && !UNITY_EDITOR
+            __driver = NetworkDriver.Create(new WebSocketNetworkInterface(), settings);
 #else
             __driver = NetworkDriver.Create(new UDPNetworkInterface(), settings);
-#endif
-            //__driver = NetworkDriver.Create(settings);
+#endif*/
+            __driver = NetworkDriver.Create(settings);
             
             __headers = new NativeList<byte>(allocator);
             __buffer = new NativeList<byte>(allocator);

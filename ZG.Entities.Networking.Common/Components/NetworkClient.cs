@@ -455,12 +455,12 @@ namespace ZG
         {
             ReconnectionTime = settings.GetNetworkConfigParameters().reconnectionTimeoutMS * 0.001f;
             
-/*#if UNITY_WEBGL && !UNITY_EDITOR
+#if UNITY_WEBGL && !UNITY_EDITOR
             __driver = NetworkDriver.Create(new WebSocketNetworkInterface(), settings);
 #else
-            __driver = NetworkDriver.Create(new UDPNetworkInterface(), settings);
-#endif*/
             __driver = NetworkDriver.Create(settings);
+#endif
+            //__driver = NetworkDriver.Create(settings);
             
             __headers = new NativeList<byte>(allocator);
             __buffer = new NativeList<byte>(allocator);
@@ -608,34 +608,11 @@ namespace ZG
         }
 
         public NetworkClientDriver(
-            AllocatorManager.AllocatorHandle allocator, 
-            int connectTimeoutMS, 
-            int maxConnectAttempts, 
-            int disconnectTimeoutMS = 30 * 1000, 
-            int heartbeatTimeoutMS = 500, 
-            int reconnectionTimeoutMS = 2000, 
-            int maxFrameTimeMS = 0, 
-            int fixedFrameTimeMS = 0, 
-            int receiveQueueCapacity = 4096, 
-            int sendQueueCapacity = 4096)
+            in NetworkSettings settings,
+            AllocatorManager.AllocatorHandle allocator)
         {
-            var settings = new NetworkSettings(Allocator.Temp);
-
-            settings.WithNetworkConfigParameters(
-                connectTimeoutMS,
-                maxConnectAttempts,
-                disconnectTimeoutMS,
-                heartbeatTimeoutMS,
-                reconnectionTimeoutMS,
-                maxFrameTimeMS,
-                fixedFrameTimeMS,
-                receiveQueueCapacity,
-                sendQueueCapacity);
-            
             __instance = new NetworkClient(settings, allocator);
             __sendBuffer = new NetworkClientSendBuffer(allocator);
-            
-            settings.Dispose();
         }
 
         public void Dispose()

@@ -1,7 +1,9 @@
-using UnityEngine;
+using System.IO;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Networking.Transport;
+using Unity.Networking.Transport.TLS;
+using UnityEngine;
 
 namespace ZG
 {
@@ -30,6 +32,10 @@ namespace ZG
         internal ushort _udpPort = 1386;
         [SerializeField]
         internal ushort _wsPort = 1387;
+        [SerializeField] 
+        internal string _certificatePath;
+        [SerializeField] 
+        internal string _privateKeyPath;
         [SerializeField] 
         internal NetworkFamily _family = NetworkFamily.Ipv4;
         [SerializeField] 
@@ -81,19 +87,32 @@ namespace ZG
                 __entity = entityManager.CreateSingleton<NetworkRelayServer>();
 
                 using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
-                    __instance = new NetworkRelayServer(
-                        stages,
-                        Allocator.Persistent,
+                {
+                    var settings = new NetworkSettings(Allocator.Temp);
+                    settings.WithNetworkConfigParameters(
                         _connectTimeoutMS,
                         _maxConnectAttempts,
                         _disconnectTimeoutMS,
                         _heartbeatTimeoutMS,
                         _reconnectionTimeoutMS,
-                        //_maxFrameTimeMS,
                         Mathf.CeilToInt(Time.maximumDeltaTime * 1000),
                         _fixedFrameTimeMS,
                         _receiveQueueCapacity,
                         _sendQueueCapacity);
+
+                    if (!string.IsNullOrEmpty(_certificatePath) && !string.IsNullOrEmpty(_privateKeyPath))
+                    {
+                        var cert = File.ReadAllText(_certificatePath);
+                        var key = File.ReadAllText(_privateKeyPath);
+
+                        settings.WithSecureServerParameters(cert, key);
+                    }
+
+                    __instance = new NetworkRelayServer(
+                        stages,
+                        settings,
+                        Allocator.Persistent);
+                }
 
                 __instance.Listen(_udpPort, _wsPort, _family);
 

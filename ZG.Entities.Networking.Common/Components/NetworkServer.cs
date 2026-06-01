@@ -270,12 +270,10 @@ namespace ZG
                     break;
             }
 
-            endpoint.Port = udpPort;
-            if (__udpDriver.Bind(endpoint) != 0 || __udpDriver.Listen() != 0)
+            if (__udpDriver.Bind(endpoint.WithPort(udpPort)) != 0 || __udpDriver.Listen() != 0)
                 UnityEngine.Debug.LogError($"Failed to bind to port {udpPort}");
             
-            endpoint.Port = wsPort;
-            if (__wsDriver.Bind(endpoint) != 0 || __wsDriver.Listen() != 0)
+            if (__wsDriver.Bind(endpoint.WithPort(wsPort)) != 0 || __wsDriver.Listen() != 0)
                 UnityEngine.Debug.LogError($"Failed to bind to port {wsPort}");
         }
 

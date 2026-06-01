@@ -1313,34 +1313,11 @@ namespace ZG
 
         public NetworkRelayServer(
             in NativeArray<NetworkPipelineStage> stages,
-            in AllocatorManager.AllocatorHandle allocator, 
-            int connectTimeoutMS, 
-            int maxConnectAttempts, 
-            int disconnectTimeoutMS = 30 * 1000, 
-            int heartbeatTimeoutMS = 500, 
-            int reconnectionTimeoutMS = 2000, 
-            int maxFrameTimeMS = 0, 
-            int fixedFrameTimeMS = 0, 
-            int receiveQueueCapacity = 4096, 
-            int sendQueueCapacity = 4096)
+            in NetworkSettings settings, 
+            in AllocatorManager.AllocatorHandle allocator)
         {
             using (var stageIDs = stages.ToPipelineStageIDs(Allocator.Temp))
-            {
-                var settings = new NetworkSettings(Allocator.Temp);
-                settings.WithNetworkConfigParameters(
-                    connectTimeoutMS,
-                    maxConnectAttempts,
-                    disconnectTimeoutMS,
-                    heartbeatTimeoutMS,
-                    reconnectionTimeoutMS,
-                    maxFrameTimeMS,
-                    fixedFrameTimeMS,
-                    receiveQueueCapacity,
-                    sendQueueCapacity);
-
                 this = new NetworkRelayServer(settings, stageIDs, allocator);
-                settings.Dispose();
-            }
         }
 
         public void Dispose()

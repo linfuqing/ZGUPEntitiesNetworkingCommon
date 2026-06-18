@@ -21,7 +21,7 @@ namespace ZG
 
     public struct NetworkClientSendBuffer : IComponentData
     {
-        private struct Buffer
+        public struct Buffer
         {
             public int index;
             public NetworkSendBuffer value;
@@ -43,15 +43,19 @@ namespace ZG
             [NativeSetThreadIndex]
             internal int _threadIndex;
 
-            public ParallelWriter(ref NetworkClientSendBuffer buffer)
+            public ParallelWriter(ref NativeParallelHashSet<int> bufferIndices, ref NativeList<Buffer> buffers)
             {
-                __bufferIndices = buffer.__bufferIndices.AsParallelWriter();
+                __bufferIndices = bufferIndices.AsParallelWriter();
 
-                __buffers = buffer.__buffers.AsDeferredJobArray();
+                __buffers = buffers.AsDeferredJobArray();
 
                 _threadIndex = 0;
             }
-            
+
+            internal ParallelWriter(ref NetworkClientSendBuffer buffer) : this(ref buffer.__bufferIndices, ref buffer.__buffers)
+            {
+            }
+
             public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
             {
                 int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount + _threadIndex;

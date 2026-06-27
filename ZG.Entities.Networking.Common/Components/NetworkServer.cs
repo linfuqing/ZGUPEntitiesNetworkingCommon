@@ -254,6 +254,11 @@ namespace ZG
             return __driver.CreatePipeline(stages);
         }
 
+        public int AddDriver(ref NetworkDriver driver)
+        {
+            return __driver.AddDriver(driver);
+        }
+
         public void Listen(ushort udpPort, ushort wsPort, NetworkFamily family = NetworkFamily.Ipv4)
         {
             NetworkEndpoint endpoint;

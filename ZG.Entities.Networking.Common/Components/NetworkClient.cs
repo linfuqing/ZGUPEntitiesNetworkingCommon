@@ -154,7 +154,14 @@ namespace ZG
             __bufferIndices.Capacity = math.max(__bufferIndices.Capacity, __pipelines.Length * JobsUtility.MaxJobThreadCount);
             return result;
         }
+        
+        public int GetPendingSendSlotCount() => __buffers.IsCreated ? __buffers.Length : 0;
 
+        public int GetPendingSendReadIndex(int slotIndex) => __buffers[slotIndex].index;
+
+        public bool TryReadPendingSend(int slotIndex, ref int readIndex, out NativeArray<byte> bytes)
+            => __buffers[slotIndex].value.ReadNext(ref readIndex, out bytes);
+        
         public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
         {
             int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount;
@@ -591,6 +598,23 @@ namespace ZG
                 jobHandle = __driver.ScheduleFlushSend(jobHandle);
             
             return jobHandle;
+        }
+
+        public void TryEnqueueSyntheticData(in NetworkPipeline pipeline, ref DataStreamReader reader)
+        {
+            Message message;
+            message.type = NetworkClientMessageType.Data;
+                            
+            do
+            {
+                message.offset = __buffer.Length;
+                message.size = reader.ReadUShort();
+                __buffer.ResizeUninitialized(message.offset + message.size);
+                reader.ReadBytes(buffer.AsArray().GetSubArray(message.offset, message.size));
+
+                __messages.Add(pipeline, message);
+            } while (reader.GetBytesRead() < reader.Length);
+
         }
     }
 

@@ -1335,6 +1335,11 @@ namespace ZG
             __modifiers.Dispose();
         }
 
+        public int AddDriver(ref NetworkDriver driver)
+        {
+            return __instance.AddDriver(ref driver);
+        }
+
         public void Listen(ushort udpPort, ushort wsPort, NetworkFamily family = NetworkFamily.Ipv4)
         {
             __instance.Listen(udpPort, wsPort, family);

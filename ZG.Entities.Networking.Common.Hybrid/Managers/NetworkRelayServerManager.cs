@@ -45,18 +45,13 @@ namespace ZG
             NetworkPipelineStage.ReliableSequenced,
         };
 
-        private NetworkRelayServer __instance;
-        
-        private static Entity __entity;
-
-        public static NetworkRelayServer server
+        public static ref NetworkRelayServer server
         {
             get
             {
-                if (__entity == Entity.Null)
-                    return default;
-                
-                return World.DefaultGameObjectInjectionWorld.EntityManager.GetComponentData<NetworkRelayServer>(__entity);
+                var world = World.DefaultGameObjectInjectionWorld;
+                world.Unmanaged.GetExistingSystemState<NetworkRelayServerSystem>().Dependency.Complete();
+                return ref world.EntityManager.GetComponentDataRW<NetworkRelayServer>(world.GetExistingSystem<NetworkRelayServerSystem>()).ValueRW;
             }
         }
 
@@ -78,28 +73,28 @@ namespace ZG
 
             return false;
         }
-        
-        void Start()
+
+        void Awake()
         {
-            if (__entity == Entity.Null)
+            var world = World.DefaultGameObjectInjectionWorld;
+            var entityManager = world.EntityManager;
+
+            NetworkRelayServer instance;
+            using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
             {
-                var entityManager = World.DefaultGameObjectInjectionWorld.EntityManager;
-                __entity = entityManager.CreateSingleton<NetworkRelayServer>();
+                var settings = new NetworkSettings(Allocator.Temp);
+                settings.WithNetworkConfigParameters(
+                    _connectTimeoutMS,
+                    _maxConnectAttempts,
+                    _disconnectTimeoutMS,
+                    _heartbeatTimeoutMS,
+                    _reconnectionTimeoutMS,
+                    Mathf.CeilToInt(Time.maximumDeltaTime * 1000),
+                    _fixedFrameTimeMS,
+                    _receiveQueueCapacity,
+                    _sendQueueCapacity);
 
-                using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
-                {
-                    var settings = new NetworkSettings(Allocator.Temp);
-                    settings.WithNetworkConfigParameters(
-                        _connectTimeoutMS,
-                        _maxConnectAttempts,
-                        _disconnectTimeoutMS,
-                        _heartbeatTimeoutMS,
-                        _reconnectionTimeoutMS,
-                        Mathf.CeilToInt(Time.maximumDeltaTime * 1000),
-                        _fixedFrameTimeMS,
-                        _receiveQueueCapacity,
-                        _sendQueueCapacity);
-
+#if !UNITY_EDITOR
                     if (!string.IsNullOrEmpty(_certificatePath) && !string.IsNullOrEmpty(_privateKeyPath))
                     {
                         var cert = File.ReadAllText(_certificatePath);
@@ -107,22 +102,30 @@ namespace ZG
 
                         settings.WithSecureServerParameters(cert, key);
                     }
-
-                    __instance = new NetworkRelayServer(
-                        stages,
-                        settings,
-                        Allocator.Persistent);
-                }
-
-                __instance.Listen(_udpPort, _wsPort, _family);
-
-                entityManager.SetComponentData(__entity, __instance);
+#endif
+                instance = new NetworkRelayServer(
+                    stages,
+                    settings,
+                    Allocator.Persistent);
             }
+
+            instance.Listen(_udpPort, _wsPort, _family);
+
+            entityManager.AddComponentData(world.GetExistingSystem<NetworkRelayServerSystem>(), instance);
         }
 
-        void OnDestroy()
+        /*void OnDestroy()
         {
-            __instance.Dispose();
-        }
+            // 强制完成所有 ECS Job
+            var world = World.DefaultGameObjectInjectionWorld;
+            if (world != null && world.IsCreated)
+            {
+                //var system = world.GetExistingSystem<NetworkRelayServerSystem>();
+                world.EntityManager.CompleteAllTrackedJobs();
+            }
+            
+            if (__instance.isCreated)
+                __instance.Dispose();
+        }*/
     }
 }

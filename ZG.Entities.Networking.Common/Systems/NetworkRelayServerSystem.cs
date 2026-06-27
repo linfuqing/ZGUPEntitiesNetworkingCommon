@@ -15,6 +15,13 @@ namespace ZG
         }
 
         [BurstCompile]
+        public void OnDestroy(ref SystemState state)
+        {
+            if(SystemAPI.TryGetSingleton<NetworkRelayServer>(out var server))
+                server.Dispose();
+        }
+
+        [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
             var server = SystemAPI.GetSingleton<NetworkRelayServer>();

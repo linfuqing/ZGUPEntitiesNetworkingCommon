@@ -34,6 +34,34 @@ namespace ZG
         public uint id;
     }
 
+    public struct NetworkRelayServerInjectSingleton : IComponentData
+    {
+        public struct Inject
+        {
+            public uint id;
+            public int byteOffset;
+            public int byteCount;
+        }
+
+        public NativeList<Inject> injects;
+        public NativeList<byte> bytes;
+        public NativeHashMap<uint, NetworkPipeline> pipelines;
+
+        public NetworkRelayServerInjectSingleton(in AllocatorManager.AllocatorHandle allocator)
+        {
+            injects = new NativeList<Inject>(allocator);
+            bytes = new NativeList<byte>(allocator);
+            pipelines = new NativeHashMap<uint, NetworkPipeline>(1, allocator);
+        }
+
+        public void Dispose()
+        {
+            injects.Dispose();
+            bytes.Dispose();
+            pipelines.Dispose();
+        }
+    }
+
     public struct NetworkRelayServerMatch
     {
         public int index;
@@ -96,11 +124,13 @@ namespace ZG
         public NativeQueue<NetworkRelayServerModifier> modifiers;
 
         public void Connect(uint id, 
-            int connectionIndex, 
-            int channelIndex, 
+            //int connectionIndex, 
+            //int channelIndex, 
             in NativeArray<byte> payload, 
             ref NetworkServerSendBuffer sendBuffer)
         {
+            sendBuffer.AsReadOnly().GetConnection(id, out _, out int channelIndex, out _);
+            
             if (channelIndex < identities.Length)
                 UnityEngine.Assertions.Assert.AreEqual(id, identities[channelIndex].ID);
             else
@@ -222,6 +252,7 @@ namespace ZG
         {
             var streamCompressionModel = StreamCompressionModel.Default;
             int type = reader.ReadPackedInt(streamCompressionModel);
+            UnityEngine.Debug.Log($"NetworkRelayServerRead type={type} id={sendBuffer.ID} ch={sendBuffer.channelIndex}");
             switch ((NetworkRelayMessageType)type)
             {
                 case NetworkRelayMessageType.Status:
@@ -1198,6 +1229,32 @@ namespace ZG
             }
         }
 
+        [BurstCompile]
+        private struct Inject : IJobParallelForDefer
+        {
+            public NetworkRelayServerHandler handler;
+
+            public NetworkServerSendBuffer.ParallelWriter sendBuffer;
+
+            [ReadOnly]
+            public NativeArray<NetworkRelayServerInjectSingleton.Inject> injects;
+
+            [ReadOnly]
+            public NativeArray<byte> injectBytes;
+
+            public void Execute(int index)
+            {
+                var inject = injects[index];
+
+                var identity = new NetworkServerSendBuffer.ParallelIdentity(inject.id, ref sendBuffer);
+                if (identity.connectionIndex < 0 || identity.channelIndex < 0)
+                    return;
+
+                var reader = new DataStreamReader(injectBytes.GetSubArray(inject.byteOffset, inject.byteCount));
+                handler.Read(ref reader, ref identity);
+            }
+        }
+
         private struct Scheduler : INetworkServerScheduler
         {
             public int innerloopBatchCount;
@@ -1211,6 +1268,10 @@ namespace ZG
             
             public NativeList<NetworkRelayServerIdentity> identities;
 
+            public NativeList<NetworkRelayServerInjectSingleton.Inject> injects;
+
+            public NativeList<byte> injectBytes;
+
             public NativeList<NetworkRelayServerMatch> matches;
 
             public NativeList<uint> matchIDs;
@@ -1221,8 +1282,21 @@ namespace ZG
 
             public NativeParallelMultiHashMap<int, uint> matchDistanceIDs;
 
+            public NetworkRelayServerHandler handler;
+
             public JobHandle Schedule(in JobHandle dependsOn)
             {
+                // Drain bot/app-layer injects right after popEvents (real client reads) and
+                // before Match/ModifyChannels, so injected messages are processed in the same
+                // frame slot as genuine wire traffic.
+                Inject inject;
+                inject.handler = handler;
+                inject.sendBuffer = sendBuffer.AsParallelWriter();
+                inject.injects = injects.AsDeferredJobArray();
+                inject.injectBytes = injectBytes.AsDeferredJobArray();
+
+                var jobHandle = inject.ScheduleByRef(injects, innerloopBatchCount, dependsOn);
+
                 Match match;
                 match.time = time;
                 match.sendBuffer = sendBuffer.AsReadOnly();
@@ -1234,7 +1308,7 @@ namespace ZG
                 match.channelIDs = channelIDs;
                 match.modifiers = modifiers.AsParallelWriter();
 
-                var jobHandle = match.ScheduleByRef(matchIDs, innerloopBatchCount, dependsOn);
+                jobHandle = match.ScheduleByRef(matchIDs, innerloopBatchCount, jobHandle);
 
                 ModifyChannels modifyChannels;
                 modifyChannels.channelIDs = channelIDs;
@@ -1335,6 +1409,11 @@ namespace ZG
             __modifiers.Dispose();
         }
 
+        public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
+        {
+            return __instance.CreatePipeline(stages);
+        }
+
         public int AddDriver(ref NetworkDriver driver)
         {
             return __instance.AddDriver(ref driver);
@@ -1353,6 +1432,7 @@ namespace ZG
         public JobHandle Schedule(
             int innerloopBatchCount,
             double time, 
+            in NetworkRelayServerInjectSingleton injectSingleton, 
             in JobHandle inputDeps)
         {
             NetworkRelayServerListener listener;
@@ -1378,15 +1458,21 @@ namespace ZG
             scheduler.channelIDs = __channelIDs;
             scheduler.channels = __channels;
             scheduler.identities = __identities;
+            scheduler.injects = injectSingleton.injects;
+            scheduler.injectBytes = injectSingleton.bytes;
             scheduler.matches = __matches;
             scheduler.matchIDs = __matchIDs;
             scheduler.matchDistances = __matchDistances;
             scheduler.matchCount = __matchCount;
             scheduler.matchDistanceIDs = __matchDistanceIDs;
+            scheduler.handler = handler;
 
-            return __instance.Schedule(ref listener, ref handler, ref scheduler, ref __sendBuffer, 
-                innerloopBatchCount, Pipeline, 
-                inputDeps);
+            return __instance.Schedule(
+                ref listener, ref handler, ref scheduler, ref __sendBuffer, 
+                injectSingleton.pipelines, 
+                Pipeline, 
+                inputDeps, 
+                innerloopBatchCount);
         }
     }
 }

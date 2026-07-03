@@ -94,7 +94,7 @@ namespace ZG
             ref T driver, 
             ref int index) where T : struct, INetworkDriver
         {
-            int length = __sizes.Length, count, byteOffset, result;
+            int length = __sizes.Length, count, byteOffset, result, previousIndex = index;
             StatusCode statusCode;
             DataStreamWriter writer = default;
             while (index < length)
@@ -115,7 +115,7 @@ namespace ZG
                     __sizes, 
                     writer.Capacity - writer.Length + byteOffset, 
                     index);
-                if (count < index)
+                if (count < index || !writer.WriteBytes(__AsArray(byteOffset, count)))
                 {
                     result = driver.EndSend(writer);
                     if (result < 0)
@@ -123,20 +123,37 @@ namespace ZG
                         statusCode = (StatusCode)result;
 
                         LogError(statusCode);
+
+                        index = previousIndex;
+                        
+                        return false;
                     }
+
+                    previousIndex = index;
 
                     writer = default;
 
                     continue;
                 }
 
-                writer.WriteBytes(__AsArray(byteOffset, count));
-
                 index = count + 1;
             }
-            
-            if(writer.IsCreated)
-                driver.EndSend(writer);
+
+            if (writer.IsCreated)
+            {
+                result = driver.EndSend(writer);
+                
+                if (result < 0)
+                {
+                    statusCode = (StatusCode)result;
+
+                    LogError(statusCode);
+                        
+                    index = previousIndex;
+
+                    return false;
+                }
+            }
 
             Clear();
             index = 0;
@@ -282,5 +299,8 @@ namespace ZG
         {
             UnityEngine.Debug.LogError($"NetworkSendMessage: {(int)statusCode}");
         }
+
+        // DIAG (temporary): pending (un-flushed) message count from a given flush index.
+        public int GetPending(int index) => __sizes.Length - index;
     }
 }

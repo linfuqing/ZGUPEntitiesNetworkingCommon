@@ -595,19 +595,24 @@ public struct NetworkServerSendBuffer
             __sendBuffers = sendBuffer.__sendBuffers.AsDeferredJobArray();
         }
 
-        public void Send(in NetworkConnection connection,
+        public void Send(
+            in NetworkConnection connection,
             in NetworkPipeline pipeline, 
+            in NativeHashMap<uint, NetworkPipeline> pipelines, 
             ref MultiNetworkDriver.Concurrent driver)
         {
             uint id = __connectionIDs[connection];
+            var targetPipeline = pipelines.TryGetValue(id, out var temp) ? temp : pipeline;
             var connectionIndex = __connectionIndices[id];
             var sendBuffer = __sendBuffers[connectionIndex.value];
-            if (sendBuffer.value.Apply(connection, pipeline, ref driver, ref sendBuffer.index))
+            if (sendBuffer.value.Apply(connection, targetPipeline, ref driver, ref sendBuffer.index))
             {
                 sendBuffer.value.Clear();
 
                 sendBuffer.index = 0;
             }
+            else
+                UnityEngine.Debug.LogError($"NetworkSend-DIAG retained id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
 
             //int channelCount = ChannelCount == 0 ? __channels.Length : 0, connectionCount = __connectionIDs.Count, index;
             NetworkSendBuffer buffer;
@@ -666,8 +671,12 @@ public struct NetworkServerSendBuffer
                     buffer = __buffers[connectionOrder.bufferIndex];
 
                     index = 0;
-                    if (!buffer.Apply(connection, pipeline, ref driver, ref index))
+                    if (!buffer.Apply(connection, targetPipeline, ref driver, ref index))
+                    {
                         sendBuffer.value.Append(buffer, index);
+
+                        UnityEngine.Debug.LogError($"NetworkSend-DIAG relay id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
+                    }
                 }
                 
                 connectionOrders.Dispose();

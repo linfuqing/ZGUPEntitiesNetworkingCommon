@@ -1,4 +1,5 @@
 using Unity.Burst;
+using Unity.Collections;
 using Unity.Entities;
 
 namespace ZG
@@ -7,11 +8,14 @@ namespace ZG
     public partial struct NetworkRelayServerSystem : ISystem
     {
         public static readonly int InnerloopBatchCount = 4;
-        
+
         [BurstCompile]
         public void OnCreate(ref SystemState state)
         {
             state.RequireForUpdate<NetworkRelayServer>();
+            state.RequireForUpdate<NetworkRelayServerInjectSingleton>();
+
+            state.EntityManager.CreateSingleton(new NetworkRelayServerInjectSingleton(Allocator.Persistent));
         }
 
         [BurstCompile]
@@ -19,6 +23,9 @@ namespace ZG
         {
             if(SystemAPI.TryGetSingleton<NetworkRelayServer>(out var server))
                 server.Dispose();
+            
+            if(SystemAPI.TryGetSingleton<NetworkRelayServerInjectSingleton>(out var injectSingleton))
+                injectSingleton.Dispose();
         }
 
         [BurstCompile]
@@ -26,7 +33,7 @@ namespace ZG
         {
             var server = SystemAPI.GetSingleton<NetworkRelayServer>();
             
-            state.Dependency = server.Schedule(InnerloopBatchCount, SystemAPI.Time.ElapsedTime, state.Dependency);
+            state.Dependency = server.Schedule(InnerloopBatchCount, SystemAPI.Time.ElapsedTime, SystemAPI.GetSingleton<NetworkRelayServerInjectSingleton>(), state.Dependency);
             
             SystemAPI.SetSingleton(server);
         }

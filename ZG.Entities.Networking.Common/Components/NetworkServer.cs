@@ -14,8 +14,6 @@ namespace ZG
     {
         void Connect(
             uint id, 
-            int connectionIndex, 
-            int channelIndex, 
             in NativeArray<byte> payload, 
             ref NetworkServerSendBuffer sendBuffer);
 
@@ -61,7 +59,7 @@ namespace ZG
                 
             connectionsToConnect.Clear();
 
-            int connectionIndex, channelIndex;
+            //int connectionIndex, channelIndex;
             uint id;
             NetworkConnection connection, temp;
             while ((connection = driver.Accept(out var payload)) != default)
@@ -95,9 +93,7 @@ namespace ZG
 
                 connectionsToConnect.Add(connection);
 
-                sendBuffer.AsReadOnly().GetConnection(id, out connectionIndex, out channelIndex, out _);
-
-                listener.Connect(id, connectionIndex, channelIndex, payload, ref sendBuffer);
+                listener.Connect(id, payload, ref sendBuffer);
             }
 
             connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, sendBuffer.connections.Length);
@@ -210,15 +206,18 @@ namespace ZG
             public NetworkPipeline pipeline;
 
             [ReadOnly]
-            public NativeArray<NetworkConnection> connections;
+            public NativeHashMap<uint, NetworkPipeline> pipelines;
 
+            [ReadOnly]
+            public NativeArray<NetworkConnection> connections;
+            
             public MultiNetworkDriver.Concurrent driver;
 
             public NetworkServerSendBuffer.Sender sender;
 
             public void Execute(int index)
             {
-                sender.Send(connections[index], pipeline, ref driver);
+                sender.Send(connections[index], pipeline, pipelines, ref driver);
             }
         }
 
@@ -292,9 +291,10 @@ namespace ZG
             ref THandler handler, 
             ref TScheduler scheduler,
             ref NetworkServerSendBuffer sendBuffer,
-            int innerloopBatchCount, 
+            in NativeHashMap<uint, NetworkPipeline> pipelines, 
             in NetworkPipeline pipeline, 
-            in JobHandle inputDeps) 
+            in JobHandle inputDeps, 
+            int innerloopBatchCount = 4) 
             where TListener : unmanaged, INetworkServerListener
             where THandler : unmanaged, INetworkServerHandler
             where TScheduler : unmanaged, INetworkServerScheduler
@@ -331,6 +331,7 @@ namespace ZG
             
             Send send;
             send.pipeline = pipeline;
+            send.pipelines = pipelines;
             send.connections = connections;
             send.driver = driver;
             send.sender = sendBuffer.AsSender();

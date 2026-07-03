@@ -452,6 +452,8 @@ namespace ZG
             SendRelay(type, (int)relayType, id, ref reader, ref writer);
 
             sendBuffer.EndWrite(writer);
+            
+            UnityEngine.Debug.Log($"[Relay]{type} {(int)relayType} {ID} to {id} in {channel}");
         }
 
         private bool __CreateOrJoin<T>(

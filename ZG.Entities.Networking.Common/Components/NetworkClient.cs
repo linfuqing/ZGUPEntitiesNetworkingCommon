@@ -378,7 +378,7 @@ namespace ZG
                             {
                                 message.offset = buffer.Length;
                                 message.size = stream.ReadUShort();
-                                if (stream.GetBytesRead() + message.size > buffer.Length)
+                                if (stream.GetBytesRead() + message.size > stream.Length)
                                 {
                                     UnityEngine.Debug.LogError("Bad Message!");
 

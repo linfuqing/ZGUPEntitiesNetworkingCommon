@@ -372,24 +372,27 @@ namespace ZG
                             isEmpty = true;
                             break;
                         case NetworkEvent.Type.Data:
-                            message.type = NetworkClientMessageType.Data;
-                            
-                            do
+                            if (stream.IsCreated)
                             {
-                                message.offset = buffer.Length;
-                                message.size = stream.ReadUShort();
-                                if (stream.GetBytesRead() + message.size > stream.Length)
+                                message.type = NetworkClientMessageType.Data;
+
+                                while (stream.GetBytesRead() + 2 < stream.Length)
                                 {
-                                    UnityEngine.Debug.LogError("Bad Message!");
+                                    message.offset = buffer.Length;
+                                    message.size = stream.ReadUShort();
+                                    if (stream.GetBytesRead() + message.size > stream.Length)
+                                    {
+                                        UnityEngine.Debug.LogError("Bad Message!");
 
-                                    break;
+                                        break;
+                                    }
+
+                                    buffer.ResizeUninitialized(message.offset + message.size);
+                                    stream.ReadBytes(buffer.AsArray().GetSubArray(message.offset, message.size));
+
+                                    messages.Add(pipeline, message);
                                 }
-                                
-                                buffer.ResizeUninitialized(message.offset + message.size);
-                                stream.ReadBytes(buffer.AsArray().GetSubArray(message.offset, message.size));
-
-                                messages.Add(pipeline, message);
-                            } while (stream.GetBytesRead() + 2 < stream.Length);
+                            }
 
                             break;
                         case NetworkEvent.Type.Connect:
@@ -409,7 +412,7 @@ namespace ZG
                             messages.Add(pipeline, message);
                             break;
                         case NetworkEvent.Type.Disconnect:
-                            var disconnectReason = (DisconnectReason)stream.ReadByte();
+                            var disconnectReason = stream.IsCreated ? (DisconnectReason)stream.ReadByte() : DisconnectReason.Default;
                             __LogDisconnectReason(disconnectReason);
 
                             header.disconnectionTime = time;

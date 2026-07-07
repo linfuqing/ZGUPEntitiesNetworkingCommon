@@ -378,11 +378,18 @@ namespace ZG
                             {
                                 message.offset = buffer.Length;
                                 message.size = stream.ReadUShort();
+                                if (stream.GetBytesRead() + message.size > buffer.Length)
+                                {
+                                    UnityEngine.Debug.LogError("Bad Message!");
+
+                                    break;
+                                }
+                                
                                 buffer.ResizeUninitialized(message.offset + message.size);
                                 stream.ReadBytes(buffer.AsArray().GetSubArray(message.offset, message.size));
 
                                 messages.Add(pipeline, message);
-                            } while (stream.GetBytesRead() < stream.Length);
+                            } while (stream.GetBytesRead() + 2 < stream.Length);
 
                             break;
                         case NetworkEvent.Type.Connect:

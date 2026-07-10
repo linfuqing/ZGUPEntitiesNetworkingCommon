@@ -33,26 +33,56 @@ namespace ZG
             }
         }
 
+        public struct BufferIndex : IEquatable<BufferIndex>, IComparable<BufferIndex>
+        {
+            public int value;
+
+            public int index;
+
+            public bool Equals(BufferIndex other)
+            {
+                return value == other.value;
+            }
+
+            public int CompareTo(BufferIndex other)
+            {
+                return index.CompareTo(other.index);
+            }
+
+            public override int GetHashCode()
+            {
+                return value;
+            }
+        }
+
         public struct ParallelWriter
         {
-            private NativeParallelHashSet<int>.ParallelWriter __bufferIndices;
+            private NativeParallelHashSet<BufferIndex>.ParallelWriter __bufferIndices;
 
             [NativeDisableParallelForRestriction]
             private NativeArray<Buffer> __buffers;
 
+            [NativeDisableParallelForRestriction]
+            private NativeArray<int> __index;
+
             [NativeSetThreadIndex]
             internal int _threadIndex;
 
-            public ParallelWriter(ref NativeParallelHashSet<int> bufferIndices, ref NativeList<Buffer> buffers)
+            public ParallelWriter(
+                ref NativeParallelHashSet<BufferIndex> bufferIndices, 
+                ref NativeList<Buffer> buffers, 
+                ref NativeArray<int> index)
             {
                 __bufferIndices = bufferIndices.AsParallelWriter();
 
                 __buffers = buffers.AsDeferredJobArray();
 
+                __index = index;
+
                 _threadIndex = 0;
             }
 
-            internal ParallelWriter(ref NetworkClientSendBuffer buffer) : this(ref buffer.__bufferIndices, ref buffer.__buffers)
+            internal ParallelWriter(ref NetworkClientSendBuffer buffer) : this(ref buffer.__bufferIndices, ref buffer.__buffers, ref buffer.__index)
             {
             }
 
@@ -74,20 +104,22 @@ namespace ZG
 
             public void EndWrite(in DataStreamWriter writer)
             {
-                int bufferIndex = (int)writer.m_SendHandleData;
-                var buffer = __buffers[bufferIndex];
+                BufferIndex bufferIndex;
+                bufferIndex.value = (int)writer.m_SendHandleData;
+                var buffer = __buffers[bufferIndex.value];
                 buffer.value.EndWrite(writer);
-                __buffers[bufferIndex] = buffer;
+                __buffers[bufferIndex.value] = buffer;
 
+                bufferIndex.index = System.Threading.Interlocked.Increment(ref __index.AsSpan()[0]);
                 __bufferIndices.Add(bufferIndex);
             }
-
         }
 
+        private NativeArray<int> __index;
         [ReadOnly]
         private NativeList<NetworkPipeline> __pipelines;
         private NativeList<Buffer> __buffers;
-        private NativeParallelHashSet<int> __bufferIndices;
+        private NativeParallelHashSet<BufferIndex> __bufferIndices;
         
         public bool isCreated => __buffers.IsCreated;
         
@@ -95,15 +127,19 @@ namespace ZG
 
         public NetworkClientSendBuffer(in AllocatorManager.AllocatorHandle allocator)
         {
+            __index = CollectionHelper.CreateNativeArray<int>(1, allocator);
+            
             __pipelines = new NativeList<NetworkPipeline>(allocator);
 
             __buffers = new NativeList<Buffer>(allocator);
 
-            __bufferIndices = new NativeParallelHashSet<int>(1, allocator);
+            __bufferIndices = new NativeParallelHashSet<BufferIndex>(1, allocator);
         }
 
         public void Dispose()
         {
+            __index.Dispose();
+            
             __pipelines.Dispose();
 
             foreach (var buffer in __buffers)
@@ -161,6 +197,36 @@ namespace ZG
 
         public bool TryReadPendingSend(int slotIndex, ref int readIndex, out NativeArray<byte> bytes)
             => __buffers[slotIndex].value.ReadNext(ref readIndex, out bytes);
+
+        /// <summary>
+        /// Recording capture: returns one pending payload per <see cref="EndWrite"/>, in the same order as <see cref="Apply"/>.
+        /// <paramref name="lastCapturedEndWriteIndex"/> is the last captured EndWrite sequence (0 before first call).
+        /// </summary>
+        public bool TryReadPendingSendInWriteOrder(ref int lastCapturedEndWriteIndex, out NativeArray<byte> bytes)
+        {
+            bytes = default;
+            if (!__bufferIndices.IsCreated || __bufferIndices.IsEmpty)
+                return false;
+
+            using var sorted = __bufferIndices.ToNativeArray(Allocator.Temp);
+            sorted.Sort();
+
+            for (int i = 0; i < sorted.Length; ++i)
+            {
+                var entry = sorted[i];
+                if (entry.index <= lastCapturedEndWriteIndex)
+                    continue;
+
+                ref var slot = ref __buffers.ElementAt(entry.value);
+                if (!slot.value.ReadNext(ref slot.index, out bytes))
+                    return false;
+
+                lastCapturedEndWriteIndex = entry.index;
+                return true;
+            }
+
+            return false;
+        }
         
         public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
         {
@@ -176,21 +242,31 @@ namespace ZG
 
         public void EndWrite(in DataStreamWriter writer)
         {
-            int bufferIndex = (int)writer.m_SendHandleData;
-            __buffers.ElementAt(bufferIndex).value.EndWrite(writer);
+            BufferIndex bufferIndex;
+            bufferIndex.value = (int)writer.m_SendHandleData;
+            __buffers.ElementAt(bufferIndex.value).value.EndWrite(writer);
             
+            
+            bufferIndex.index = ++__index[0];
             __bufferIndices.Add(bufferIndex);
         }
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
         {
-            foreach (var bufferIndex in __bufferIndices)
+            using (var bufferIndices = __bufferIndices.ToNativeArray(Allocator.Temp))
             {
-                ref var buffer = ref __buffers.ElementAt(bufferIndex);
-                buffer.value.Apply(connection, __pipelines[bufferIndex / JobsUtility.MaxJobThreadCount], ref driver, ref buffer.index);
+                bufferIndices.Sort();
+                
+                foreach (var bufferIndex in bufferIndices)
+                {
+                    ref var buffer = ref __buffers.ElementAt(bufferIndex.value);
+                    buffer.value.Apply(connection, __pipelines[bufferIndex.value / JobsUtility.MaxJobThreadCount], ref driver,
+                        ref buffer.index);
+                }
             }
-            
+
             __bufferIndices.Clear();
+            __index[0] = 0;
         }
     }
     

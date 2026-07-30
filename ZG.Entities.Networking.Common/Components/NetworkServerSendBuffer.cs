@@ -611,8 +611,8 @@ public struct NetworkServerSendBuffer
 
                 sendBuffer.index = 0;
             }
-            else
-                UnityEngine.Debug.LogError($"NetworkSend-DIAG retained id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
+            //else
+                //UnityEngine.Debug.LogError($"NetworkSend-DIAG retained id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
 
             //int channelCount = ChannelCount == 0 ? __channels.Length : 0, connectionCount = __connectionIDs.Count, index;
             NetworkSendBuffer buffer;
@@ -675,7 +675,7 @@ public struct NetworkServerSendBuffer
                     {
                         sendBuffer.value.Append(buffer, index);
 
-                        UnityEngine.Debug.LogError($"NetworkSend-DIAG relay id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
+                        //UnityEngine.Debug.LogError($"NetworkSend-DIAG relay id={(int)id} pending={sendBuffer.value.GetPending(sendBuffer.index)}");
                     }
                 }
                 
@@ -935,8 +935,31 @@ public struct NetworkServerSendBuffer
         __connectionIDs.Remove(connection);
 
         var connectionIndex = __connectionIndices[id];
+        int connectionCount = __connections.Length;
         
         __connections.RemoveAt(connectionIndex.value);
+
+        UnityEngine.Assertions.Assert.IsTrue(__sendBuffers.Length >= connectionCount);
+        UnityEngine.Assertions.Assert.IsTrue(__targets.Length >= connectionCount);
+
+        var sendBuffer = __sendBuffers[connectionIndex.value];
+        sendBuffer.Clear();
+
+        var targets = __targets[connectionIndex.value];
+        targets.Clear();
+
+        // Keep the removed slot allocated as the first spare. The shifted active slots retain
+        // their pending backlog, while each nested native container still has exactly one owner.
+        ShiftSlotsForDisconnect(
+            ref __sendBuffers,
+            connectionIndex.value,
+            connectionCount,
+            in sendBuffer);
+        ShiftSlotsForDisconnect(
+            ref __targets,
+            connectionIndex.value,
+            connectionCount,
+            in targets);
 
         uint tempID;
         ConnectionIndex tempConnectionIndex;
@@ -953,8 +976,6 @@ public struct NetworkServerSendBuffer
                 __connectionIndices[tempID] = tempConnectionIndex;
             }
         }
-        
-        //__sendBuffers.ElementAt(connectionIndex.value).Clear();
 
         connectionIndex.value = -1;
         __connectionIndices[id] = connectionIndex;
@@ -962,6 +983,23 @@ public struct NetworkServerSendBuffer
         __Log($"Disconnect {id}");
         
         return id;
+    }
+
+    internal static void ShiftSlotsForDisconnect<T>(
+        ref NativeList<T> slots,
+        int removedIndex,
+        int activeCount,
+        in T recycled) where T : unmanaged
+    {
+        UnityEngine.Assertions.Assert.IsTrue(activeCount > 0);
+        UnityEngine.Assertions.Assert.IsTrue((uint)removedIndex < (uint)activeCount);
+        UnityEngine.Assertions.Assert.IsTrue(slots.Length >= activeCount);
+
+        int lastActiveIndex = activeCount - 1;
+        for (int i = removedIndex; i < lastActiveIndex; ++i)
+            slots[i] = slots[i + 1];
+
+        slots[lastActiveIndex] = recycled;
     }
 
     public static int GetTargetFromChannel(int channel)

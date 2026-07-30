@@ -28,7 +28,7 @@ namespace ZG
 
         public bool canMatch => (channelFlag & NetworkRelayChannelFlag.Online) ==
                                   NetworkRelayChannelFlag.Online &&
-                                  ((int)channelFlag >> (int)NetworkRelayChannelFlag.ShiftToStatus) == 0;
+                                  channelStatus == 0;
 
         public int match
         {
@@ -43,6 +43,8 @@ namespace ZG
 
             private set;
         }
+
+        public int channelStatus => (int)channelFlag >> (int)NetworkRelayChannelFlag.ShiftToStatus;
 
         public NetworkRelayChannelFlag channelFlag
         {
@@ -207,7 +209,7 @@ namespace ZG
                 }
             }
 
-            /*if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp)
+            /*if ((channelFlag & NetworkRelayChannelFlag.Temp) == NetworkRelayChannelFlag.Temp && channelStatus == 0)
                 Leave(id, ref sendBuffer);*/
         }
 
@@ -253,8 +255,7 @@ namespace ZG
             in NativeArray<NetworkRelayServerIdentity> identities, 
             ref T sendBuffer) where T : struct, INetworkServerSendBuffer
         {
-            int channelStatus = (int)this.channelFlag;
-            channelStatus >>= (int)NetworkRelayChannelFlag.ShiftToStatus;
+            int channelStatus = this.channelStatus;
             if (channelStatus == value)
                 return false;
 
@@ -453,7 +454,7 @@ namespace ZG
 
             sendBuffer.EndWrite(writer);
             
-            UnityEngine.Debug.Log($"[Relay]{type} {(int)relayType} {ID} to {id} in {channel}");
+            //UnityEngine.Debug.Log($"[Relay]{type} {(int)relayType} {ID} to {id} in {channel}");
         }
 
         private bool __CreateOrJoin<T>(

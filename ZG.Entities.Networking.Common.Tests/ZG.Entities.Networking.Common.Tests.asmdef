@@ -1,0 +1,24 @@
+{
+    "name": "ZG.Entities.Networking.Common.Tests",
+    "rootNamespace": "",
+    "references": [
+        "ZG.Entities.Networking.Common",
+        "Unity.Collections",
+        "Unity.Networking.Transport",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

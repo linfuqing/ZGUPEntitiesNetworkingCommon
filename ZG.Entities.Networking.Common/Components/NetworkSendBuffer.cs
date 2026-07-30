@@ -48,6 +48,10 @@ namespace ZG
         
         private UnsafeList<int> __sizes;
         private UnsafeList<byte> __bytes;
+
+        public bool isCreated => __sizes.IsCreated && __bytes.IsCreated;
+
+        public int messageCount => __sizes.IsCreated ? __sizes.Length : 0;
         
         public NetworkSendBuffer(in AllocatorManager.AllocatorHandle allocator)
         {
@@ -69,22 +73,62 @@ namespace ZG
 
         public void Append(in NetworkSendBuffer buffer, int index)
         {
-            int length = buffer.__sizes.Length;
-            if (length > index)
-            {
-                int sizeLength = __sizes.Length;
-                __sizes.Resize(sizeLength + length - index, NativeArrayOptions.UninitializedMemory);
-                
-                int size = buffer.__sizes[index],
-                    offset = __bytes.Length - size, 
-                    sizeOffset = sizeLength - index;
-                for (int i = index; i < length; ++i)
-                    __sizes[sizeOffset + i] = buffer.__sizes[i] + offset;
+            if (index < 0 || !__sizes.IsCreated || !__bytes.IsCreated ||
+                !buffer.__sizes.IsCreated || !buffer.__bytes.IsCreated)
+                return;
 
-                unsafe
-                {
-                    __bytes.AddRange(buffer.__bytes.Ptr + size, buffer.__bytes.Length - size);
-                }
+            int sourceSizeLength = buffer.__sizes.Length;
+            if (index >= sourceSizeLength)
+                return;
+
+            int destinationSizeLength = __sizes.Length;
+            int destinationByteLength = __bytes.Length;
+            int previousSize = 0;
+            for (int i = 0; i < destinationSizeLength; ++i)
+            {
+                int size = __sizes[i];
+                if (size <= previousSize || size > destinationByteLength)
+                    return;
+
+                previousSize = size;
+            }
+
+            if (previousSize != destinationByteLength)
+                return;
+
+            int sourceByteLength = buffer.__bytes.Length;
+            int sourceOffset = index > 0 ? buffer.__sizes[index - 1] : 0;
+            previousSize = sourceOffset;
+            if (sourceOffset < 0 || sourceOffset > sourceByteLength)
+                return;
+
+            for (int i = index; i < sourceSizeLength; ++i)
+            {
+                int size = buffer.__sizes[i];
+                if (size <= previousSize || size > sourceByteLength)
+                    return;
+
+                previousSize = size;
+            }
+
+            if (previousSize != sourceByteLength)
+                return;
+
+            int sourceSizeCount = sourceSizeLength - index;
+            int sourceByteCount = sourceByteLength - sourceOffset;
+            if (sourceSizeCount > int.MaxValue - destinationSizeLength ||
+                sourceByteCount > int.MaxValue - destinationByteLength)
+                return;
+
+            __sizes.Resize(destinationSizeLength + sourceSizeCount, NativeArrayOptions.UninitializedMemory);
+
+            for (int i = index; i < sourceSizeLength; ++i)
+                __sizes[destinationSizeLength + i - index] =
+                    destinationByteLength + (buffer.__sizes[i] - sourceOffset);
+
+            unsafe
+            {
+                __bytes.AddRange(buffer.__bytes.Ptr + sourceOffset, sourceByteCount);
             }
         }
 
@@ -122,7 +166,8 @@ namespace ZG
                     {
                         statusCode = (StatusCode)result;
 
-                        LogError(statusCode);
+                        if(StatusCode.NetworkSendQueueFull != statusCode)
+                            LogError(statusCode);
 
                         index = previousIndex;
                         
@@ -147,7 +192,8 @@ namespace ZG
                 {
                     statusCode = (StatusCode)result;
 
-                    LogError(statusCode);
+                    if(StatusCode.NetworkSendQueueFull != statusCode)
+                        LogError(statusCode);
                         
                     index = previousIndex;
 

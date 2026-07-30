@@ -252,7 +252,7 @@ namespace ZG
         {
             var streamCompressionModel = StreamCompressionModel.Default;
             int type = reader.ReadPackedInt(streamCompressionModel);
-            UnityEngine.Debug.Log($"NetworkRelayServerRead type={type} id={sendBuffer.ID} ch={sendBuffer.channelIndex}");
+            //UnityEngine.Debug.Log($"NetworkRelayServerRead type={type} id={sendBuffer.ID} ch={sendBuffer.channelIndex}");
             switch ((NetworkRelayMessageType)type)
             {
                 case NetworkRelayMessageType.Status:
@@ -1229,12 +1229,102 @@ namespace ZG
             }
         }
 
+        internal struct InjectGroup
+        {
+            public uint id;
+            public int offset;
+            public int count;
+        }
+
+        [BurstCompile]
+        internal struct BuildInjectGroups : IJob
+        {
+            [ReadOnly]
+            public NativeList<NetworkRelayServerInjectSingleton.Inject> injects;
+
+            public NativeList<InjectGroup> groups;
+            public NativeList<int> groupedInjectIndices;
+            public NativeHashMap<uint, int> groupIndices;
+
+            public void Execute()
+            {
+                groups.Clear();
+                groupedInjectIndices.Clear();
+                groupIndices.Clear();
+
+                int injectCount = injects.Length;
+                if (injectCount < 1)
+                    return;
+
+                groups.Capacity = math.max(groups.Capacity, injectCount);
+                groupedInjectIndices.ResizeUninitialized(injectCount);
+                groupIndices.Capacity = math.max(groupIndices.Capacity, injectCount);
+
+                int groupIndex;
+                InjectGroup group;
+                for (int i = 0; i < injectCount; ++i)
+                {
+                    uint id = injects[i].id;
+                    if (groupIndices.TryGetValue(id, out groupIndex))
+                    {
+                        group = groups[groupIndex];
+                        ++group.count;
+                        groups[groupIndex] = group;
+                    }
+                    else
+                    {
+                        groupIndex = groups.Length;
+                        groupIndices.Add(id, groupIndex);
+                        groups.Add(new InjectGroup
+                        {
+                            id = id,
+                            offset = 0,
+                            count = 1
+                        });
+                    }
+                }
+
+                int offset = 0;
+                int groupCount = groups.Length;
+                for (int i = 0; i < groupCount; ++i)
+                {
+                    group = groups[i];
+                    group.offset = offset;
+                    groups[i] = group;
+                    offset += group.count;
+                }
+
+                // Use offset as a temporary write cursor. Scanning injects in their original order
+                // preserves the original per-user message order inside every group.
+                for (int i = 0; i < injectCount; ++i)
+                {
+                    groupIndex = groupIndices[injects[i].id];
+                    group = groups[groupIndex];
+                    groupedInjectIndices[group.offset++] = i;
+                    groups[groupIndex] = group;
+                }
+
+                for (int i = 0; i < groupCount; ++i)
+                {
+                    group = groups[i];
+                    group.offset -= group.count;
+                    groups[i] = group;
+                }
+            }
+        }
+
         [BurstCompile]
         private struct Inject : IJobParallelForDefer
         {
             public NetworkRelayServerHandler handler;
 
             public NetworkServerSendBuffer.ParallelWriter sendBuffer;
+
+            [ReadOnly]
+            public NativeArray<InjectGroup> groups;
+
+            [ReadOnly]
+            public NativeArray<int> groupedInjectIndices;
 
             [ReadOnly]
             public NativeArray<NetworkRelayServerInjectSingleton.Inject> injects;
@@ -1244,14 +1334,39 @@ namespace ZG
 
             public void Execute(int index)
             {
-                var inject = injects[index];
+                var group = groups[index];
+                int groupedInjectCount = groupedInjectIndices.Length;
+                if (group.offset < 0 ||
+                    group.count < 1 ||
+                    group.offset > groupedInjectCount ||
+                    group.count > groupedInjectCount - group.offset)
+                    return;
 
-                var identity = new NetworkServerSendBuffer.ParallelIdentity(inject.id, ref sendBuffer);
+                var identity = new NetworkServerSendBuffer.ParallelIdentity(group.id, ref sendBuffer);
                 if (identity.connectionIndex < 0 || identity.channelIndex < 0)
                     return;
 
-                var reader = new DataStreamReader(injectBytes.GetSubArray(inject.byteOffset, inject.byteCount));
-                handler.Read(ref reader, ref identity);
+                int injectCount = injects.Length;
+                int injectByteCount = injectBytes.Length;
+                int end = group.offset + group.count;
+                for (int i = group.offset; i < end; ++i)
+                {
+                    int injectIndex = groupedInjectIndices[i];
+                    if ((uint)injectIndex >= (uint)injectCount)
+                        continue;
+
+                    var inject = injects[injectIndex];
+                    if (inject.id != group.id ||
+                        inject.byteOffset < 0 ||
+                        inject.byteCount < 1 ||
+                        inject.byteOffset > injectByteCount ||
+                        inject.byteCount > injectByteCount - inject.byteOffset)
+                        continue;
+
+                    var reader = new DataStreamReader(
+                        injectBytes.GetSubArray(inject.byteOffset, inject.byteCount));
+                    handler.Read(ref reader, ref identity);
+                }
             }
         }
 
@@ -1272,6 +1387,12 @@ namespace ZG
 
             public NativeList<byte> injectBytes;
 
+            public NativeList<InjectGroup> injectGroups;
+
+            public NativeList<int> groupedInjectIndices;
+
+            public NativeHashMap<uint, int> injectGroupIndices;
+
             public NativeList<NetworkRelayServerMatch> matches;
 
             public NativeList<uint> matchIDs;
@@ -1289,13 +1410,23 @@ namespace ZG
                 // Drain bot/app-layer injects right after popEvents (real client reads) and
                 // before Match/ModifyChannels, so injected messages are processed in the same
                 // frame slot as genuine wire traffic.
+                BuildInjectGroups buildInjectGroups;
+                buildInjectGroups.injects = injects;
+                buildInjectGroups.groups = injectGroups;
+                buildInjectGroups.groupedInjectIndices = groupedInjectIndices;
+                buildInjectGroups.groupIndices = injectGroupIndices;
+
+                var jobHandle = buildInjectGroups.ScheduleByRef(dependsOn);
+
                 Inject inject;
                 inject.handler = handler;
                 inject.sendBuffer = sendBuffer.AsParallelWriter();
+                inject.groups = injectGroups.AsDeferredJobArray();
+                inject.groupedInjectIndices = groupedInjectIndices.AsDeferredJobArray();
                 inject.injects = injects.AsDeferredJobArray();
                 inject.injectBytes = injectBytes.AsDeferredJobArray();
 
-                var jobHandle = inject.ScheduleByRef(injects, innerloopBatchCount, dependsOn);
+                jobHandle = inject.ScheduleByRef(injectGroups, innerloopBatchCount, jobHandle);
 
                 Match match;
                 match.time = time;
@@ -1348,6 +1479,12 @@ namespace ZG
 
         private NativeQueue<NetworkRelayServerModifier> __modifiers;
 
+        private NativeList<InjectGroup> __injectGroups;
+
+        private NativeList<int> __groupedInjectIndices;
+
+        private NativeHashMap<uint, int> __injectGroupIndices;
+
         public bool isCreated => __instance.isCreated;
 
         public int connectionCount => __sendBuffer.connections.Length;
@@ -1382,6 +1519,10 @@ namespace ZG
 
             __modifiers = new NativeQueue<NetworkRelayServerModifier>(allocator);
 
+            __injectGroups = new NativeList<InjectGroup>(allocator);
+            __groupedInjectIndices = new NativeList<int>(allocator);
+            __injectGroupIndices = new NativeHashMap<uint, int>(1, allocator);
+
             Pipeline = __instance.CreatePipeline(stages);
         }
 
@@ -1407,6 +1548,9 @@ namespace ZG
             __matchDistanceIDs.Dispose();
             __channelIDs.Dispose();
             __modifiers.Dispose();
+            __injectGroups.Dispose();
+            __groupedInjectIndices.Dispose();
+            __injectGroupIndices.Dispose();
         }
 
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
@@ -1460,6 +1604,9 @@ namespace ZG
             scheduler.identities = __identities;
             scheduler.injects = injectSingleton.injects;
             scheduler.injectBytes = injectSingleton.bytes;
+            scheduler.injectGroups = __injectGroups;
+            scheduler.groupedInjectIndices = __groupedInjectIndices;
+            scheduler.injectGroupIndices = __injectGroupIndices;
             scheduler.matches = __matches;
             scheduler.matchIDs = __matchIDs;
             scheduler.matchDistances = __matchDistances;

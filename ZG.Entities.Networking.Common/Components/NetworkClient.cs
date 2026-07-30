@@ -21,15 +21,134 @@ namespace ZG
 
     public struct NetworkClientSendBuffer : IComponentData
     {
+        public readonly struct EndWriteCaptureStamp
+        {
+            public readonly uint epoch;
+            public readonly double timestamp;
+
+            public EndWriteCaptureStamp(uint epoch, double timestamp)
+            {
+                this.epoch = epoch;
+                this.timestamp = timestamp;
+            }
+        }
+
+        public readonly struct EndWriteCaptureToken
+        {
+            internal readonly uint generation;
+            internal readonly int slotIndex;
+            internal readonly int localIndex;
+
+            public readonly uint sequence;
+
+            internal EndWriteCaptureToken(uint generation, int slotIndex, int localIndex, uint sequence)
+            {
+                this.generation = generation;
+                this.slotIndex = slotIndex;
+                this.localIndex = localIndex;
+                this.sequence = sequence;
+            }
+        }
+
+        public enum EndWriteCaptureReadStatus : byte
+        {
+            Success,
+            Empty,
+            NotActive,
+            Faulted
+        }
+
+        public enum EndWriteCaptureFault : byte
+        {
+            None,
+            JournalNotCreated,
+            JournalAppendFailed,
+            JournalInvariantFailed,
+            SequenceWindowExceeded
+        }
+
+        internal struct EndWriteCaptureMetadata
+        {
+            public uint sequence;
+            public EndWriteCaptureStamp stamp;
+        }
+
+        private struct EndWriteCaptureControl
+        {
+            public int isActive;
+            public int generation;
+            public int sequence;
+            public int outstandingCount;
+            public int fault;
+            public EndWriteCaptureStamp stamp;
+        }
+
+        private struct DriverWrapper : INetworkDriver
+        {
+            private NetworkDriver.Concurrent __instance;
+
+            public DriverWrapper(ref NetworkDriver.Concurrent instance)
+            {
+                __instance = instance;
+            }
+
+            public int BeginSend(
+                NetworkPipeline pipe,
+                NetworkConnection connection,
+                out DataStreamWriter writer,
+                int requiredPayloadSize = 0)
+                => __instance.BeginSend(pipe, connection, out writer, requiredPayloadSize);
+
+            public int EndSend(DataStreamWriter writer) => __instance.EndSend(writer);
+        }
+
         public struct Buffer
         {
             public int index;
             public NetworkSendBuffer value;
 
+            internal int captureReadIndex;
+            internal NetworkSendBuffer capturePayloads;
+            internal UnsafeList<EndWriteCaptureMetadata> captureMetadata;
+
             public void Clear()
             {
                 index = 0;
                 value.Clear();
+            }
+
+            internal void InitializeCapture(in AllocatorManager.AllocatorHandle allocator)
+            {
+                captureReadIndex = 0;
+                if (capturePayloads.isCreated)
+                    capturePayloads.Clear();
+                else
+                    capturePayloads = new NetworkSendBuffer(allocator);
+
+                if (captureMetadata.IsCreated)
+                    captureMetadata.Clear();
+                else
+                    captureMetadata = new UnsafeList<EndWriteCaptureMetadata>(1, allocator);
+            }
+
+            internal void ClearCapture()
+            {
+                captureReadIndex = 0;
+                if (capturePayloads.isCreated)
+                    capturePayloads.Clear();
+
+                if (captureMetadata.IsCreated)
+                    captureMetadata.Clear();
+            }
+
+            internal void Dispose()
+            {
+                value.Dispose();
+                if (capturePayloads.isCreated)
+                    capturePayloads.Dispose();
+
+                if (captureMetadata.IsCreated)
+                    captureMetadata.Dispose();
             }
         }
 
@@ -65,25 +184,19 @@ namespace ZG
             [NativeDisableParallelForRestriction]
             private NativeArray<int> __index;
 
+            [NativeDisableParallelForRestriction]
+            private NativeArray<EndWriteCaptureControl> __captureControl;
+
             [NativeSetThreadIndex]
             internal int _threadIndex;
 
-            public ParallelWriter(
-                ref NativeParallelHashSet<BufferIndex> bufferIndices, 
-                ref NativeList<Buffer> buffers, 
-                ref NativeArray<int> index)
+            internal ParallelWriter(ref NetworkClientSendBuffer buffer)
             {
-                __bufferIndices = bufferIndices.AsParallelWriter();
-
-                __buffers = buffers.AsDeferredJobArray();
-
-                __index = index;
-
+                __bufferIndices = buffer.__bufferIndices.AsParallelWriter();
+                __buffers = buffer.__buffers.AsDeferredJobArray();
+                __index = buffer.__index;
+                __captureControl = buffer.__captureControl;
                 _threadIndex = 0;
-            }
-
-            internal ParallelWriter(ref NetworkClientSendBuffer buffer) : this(ref buffer.__bufferIndices, ref buffer.__buffers, ref buffer.__index)
-            {
             }
 
             public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
@@ -107,7 +220,19 @@ namespace ZG
                 BufferIndex bufferIndex;
                 bufferIndex.value = (int)writer.m_SendHandleData;
                 var buffer = __buffers[bufferIndex.value];
+                int messageIndex = buffer.value.messageCount;
                 buffer.value.EndWrite(writer);
+
+                if (buffer.value.messageCount != messageIndex + 1)
+                {
+                    __buffers[bufferIndex.value] = buffer;
+                    return;
+                }
+
+                __CaptureCommittedEndWrite(
+                    ref buffer,
+                    messageIndex,
+                    ref __captureControl);
                 __buffers[bufferIndex.value] = buffer;
 
                 bufferIndex.index = System.Threading.Interlocked.Increment(ref __index.AsSpan()[0]);
@@ -120,6 +245,7 @@ namespace ZG
         private NativeList<NetworkPipeline> __pipelines;
         private NativeList<Buffer> __buffers;
         private NativeParallelHashSet<BufferIndex> __bufferIndices;
+        private NativeArray<EndWriteCaptureControl> __captureControl;
         
         public bool isCreated => __buffers.IsCreated;
         
@@ -134,6 +260,8 @@ namespace ZG
             __buffers = new NativeList<Buffer>(allocator);
 
             __bufferIndices = new NativeParallelHashSet<BufferIndex>(1, allocator);
+
+            __captureControl = CollectionHelper.CreateNativeArray<EndWriteCaptureControl>(1, allocator);
         }
 
         public void Dispose()
@@ -143,16 +271,17 @@ namespace ZG
             __pipelines.Dispose();
 
             foreach (var buffer in __buffers)
-                buffer.value.Dispose();
+                buffer.Dispose();
             
             __buffers.Dispose();
             __bufferIndices.Dispose();
+            __captureControl.Dispose();
         }
 
         public void Clear()
         {
             Buffer buffer;
-            int length = math.min(__pipelines.Length, __buffers.Length);
+            int length = __buffers.Length;
             for (int i = 0; i < length; ++i)
             {
                 buffer = __buffers[i];
@@ -161,6 +290,7 @@ namespace ZG
                 __buffers[i] = buffer;
             }
             __bufferIndices.Clear();
+            __index[0] = 0;
         }
 
         public ParallelWriter AsParallelWriter()
@@ -179,11 +309,13 @@ namespace ZG
             
             __pipelines.Add(pipeline);
 
-            Buffer buffer;
-            buffer.index = 0;
             for (int i = 0; i < JobsUtility.MaxJobThreadCount; ++i)
             {
+                var buffer = default(Buffer);
                 buffer.value = new NetworkSendBuffer(allocator);
+                if (__captureControl[0].isActive != 0)
+                    buffer.InitializeCapture(allocator);
+
                 __buffers.Add(buffer);
             }
             
@@ -199,35 +331,238 @@ namespace ZG
             => __buffers[slotIndex].value.ReadNext(ref readIndex, out bytes);
 
         /// <summary>
-        /// Recording capture: returns one pending payload per <see cref="EndWrite"/>, in the same order as <see cref="Apply"/>.
-        /// <paramref name="lastCapturedEndWriteIndex"/> is the last captured EndWrite sequence (0 before first call).
+        /// Starts the optional completed-EndWrite journal. Call only after producer jobs are complete.
+        /// The journal is independent from the transport buffers and therefore survives <see cref="Apply"/> and
+        /// <see cref="Clear"/>. Only one consumer may drain it.
         /// </summary>
-        public bool TryReadPendingSendInWriteOrder(ref int lastCapturedEndWriteIndex, out NativeArray<byte> bytes)
+        public uint BeginEndWriteCapture(in EndWriteCaptureStamp initialStamp)
         {
-            bytes = default;
-            if (!__bufferIndices.IsCreated || __bufferIndices.IsEmpty)
-                return false;
+            if (!isCreated || !__captureControl.IsCreated)
+                throw new InvalidOperationException("NetworkClientSendBuffer is not created.");
 
-            using var sorted = __bufferIndices.ToNativeArray(Allocator.Temp);
-            sorted.Sort();
+            ref var control = ref __captureControl.AsSpan()[0];
+            if (control.isActive != 0)
+                throw new InvalidOperationException("EndWrite capture is already active.");
 
-            for (int i = 0; i < sorted.Length; ++i)
+            var captureAllocator = allocator;
+            for (int i = 0; i < __buffers.Length; ++i)
             {
-                var entry = sorted[i];
-                if (entry.index <= lastCapturedEndWriteIndex)
-                    continue;
-
-                ref var slot = ref __buffers.ElementAt(entry.value);
-                if (!slot.value.ReadNext(ref slot.index, out bytes))
-                    return false;
-
-                lastCapturedEndWriteIndex = entry.index;
-                return true;
+                var buffer = __buffers[i];
+                buffer.InitializeCapture(captureAllocator);
+                __buffers[i] = buffer;
             }
 
-            return false;
+            int generation = unchecked(control.generation + 1);
+            if (generation == 0)
+                generation = 1;
+
+            control = new EndWriteCaptureControl
+            {
+                isActive = 1,
+                generation = generation,
+                stamp = initialStamp
+            };
+
+            return unchecked((uint)generation);
         }
-        
+
+        /// <summary>
+        /// Updates the opaque producer epoch and high-precision timestamp copied by subsequent EndWrites.
+        /// Do not call concurrently with an EndWrite producer job.
+        /// </summary>
+        public bool SetEndWriteCaptureStamp(uint generation, in EndWriteCaptureStamp stamp)
+        {
+            if (!__captureControl.IsCreated)
+                return false;
+
+            ref var control = ref __captureControl.AsSpan()[0];
+            if (control.isActive == 0 || unchecked((uint)control.generation) != generation)
+                return false;
+
+            control.stamp = stamp;
+            return true;
+        }
+
+        public int capturedEndWriteCount
+        {
+            get
+            {
+                if (!__captureControl.IsCreated)
+                    return 0;
+
+                int count = __captureControl[0].outstandingCount;
+                return count > 0 ? count : 0;
+            }
+        }
+
+        public EndWriteCaptureFault endWriteCaptureFault
+            => !__captureControl.IsCreated
+                ? EndWriteCaptureFault.JournalNotCreated
+                : (EndWriteCaptureFault)__captureControl[0].fault;
+
+        /// <summary>
+        /// Peeks the globally earliest unread committed EndWrite. The payload view remains valid until the matching
+        /// <see cref="ConsumeCapturedEndWrite"/> or another producer write touches that slot; copy it before consuming.
+        /// Call only after producer jobs are complete.
+        /// </summary>
+        public EndWriteCaptureReadStatus TryPeekCapturedEndWrite(
+            out EndWriteCaptureToken token,
+            out NativeArray<byte> bytes,
+            out EndWriteCaptureStamp stamp)
+        {
+            token = default;
+            bytes = default;
+            stamp = default;
+            if (!__captureControl.IsCreated)
+                return EndWriteCaptureReadStatus.NotActive;
+
+            ref var control = ref __captureControl.AsSpan()[0];
+            if (control.isActive == 0)
+                return EndWriteCaptureReadStatus.NotActive;
+
+            if (control.fault != 0)
+                return EndWriteCaptureReadStatus.Faulted;
+
+            if (control.outstandingCount < 1)
+                return EndWriteCaptureReadStatus.Empty;
+
+            int bestSlotIndex = -1;
+            EndWriteCaptureMetadata bestMetadata = default;
+            for (int slotIndex = 0; slotIndex < __buffers.Length; ++slotIndex)
+            {
+                var buffer = __buffers[slotIndex];
+                if (!buffer.captureMetadata.IsCreated ||
+                    buffer.captureReadIndex < 0 ||
+                    buffer.captureReadIndex >= buffer.captureMetadata.Length)
+                {
+                    continue;
+                }
+
+                var metadata = buffer.captureMetadata[buffer.captureReadIndex];
+                if (bestSlotIndex < 0)
+                {
+                    bestSlotIndex = slotIndex;
+                    bestMetadata = metadata;
+                    continue;
+                }
+
+                if (metadata.sequence == bestMetadata.sequence)
+                {
+                    __SetCaptureFault(ref control, EndWriteCaptureFault.JournalInvariantFailed);
+                    return EndWriteCaptureReadStatus.Faulted;
+                }
+
+                if (__IsSequenceBefore(metadata.sequence, bestMetadata.sequence))
+                {
+                    bestSlotIndex = slotIndex;
+                    bestMetadata = metadata;
+                }
+            }
+
+            if (bestSlotIndex < 0)
+            {
+                __SetCaptureFault(ref control, EndWriteCaptureFault.JournalInvariantFailed);
+                return EndWriteCaptureReadStatus.Faulted;
+            }
+
+            var bestBuffer = __buffers[bestSlotIndex];
+            int payloadIndex = bestBuffer.captureReadIndex;
+            int probeIndex = payloadIndex;
+            if (!bestBuffer.capturePayloads.isCreated ||
+                bestBuffer.capturePayloads.messageCount != bestBuffer.captureMetadata.Length ||
+                !bestBuffer.capturePayloads.ReadNext(ref probeIndex, out bytes) ||
+                probeIndex != payloadIndex + 1)
+            {
+                bytes = default;
+                __SetCaptureFault(ref control, EndWriteCaptureFault.JournalInvariantFailed);
+                return EndWriteCaptureReadStatus.Faulted;
+            }
+
+            token = new EndWriteCaptureToken(
+                unchecked((uint)control.generation),
+                bestSlotIndex,
+                payloadIndex,
+                bestMetadata.sequence);
+            stamp = bestMetadata.stamp;
+            return EndWriteCaptureReadStatus.Success;
+        }
+
+        /// <summary>Consumes exactly the frame returned by the latest matching peek.</summary>
+        public bool ConsumeCapturedEndWrite(in EndWriteCaptureToken token)
+        {
+            if (!__captureControl.IsCreated)
+                return false;
+
+            ref var control = ref __captureControl.AsSpan()[0];
+            if (control.isActive == 0 ||
+                unchecked((uint)control.generation) != token.generation ||
+                token.slotIndex < 0 ||
+                token.slotIndex >= __buffers.Length)
+            {
+                return false;
+            }
+
+            ref var buffer = ref __buffers.ElementAt(token.slotIndex);
+            if (!buffer.captureMetadata.IsCreated ||
+                buffer.captureReadIndex != token.localIndex ||
+                token.localIndex < 0 ||
+                token.localIndex >= buffer.captureMetadata.Length ||
+                buffer.captureMetadata[token.localIndex].sequence != token.sequence)
+            {
+                return false;
+            }
+
+            ++buffer.captureReadIndex;
+            int outstandingCount = --control.outstandingCount;
+            if (outstandingCount < 0)
+            {
+                __SetCaptureFault(ref control, EndWriteCaptureFault.JournalInvariantFailed);
+                return false;
+            }
+
+            if (buffer.captureReadIndex == buffer.captureMetadata.Length)
+                buffer.ClearCapture();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Ends the capture session. Without <paramref name="discardUnread"/>, every frame must have been consumed and
+        /// no capture fault may be present; otherwise this returns false and leaves the session active for inspection.
+        /// </summary>
+        public bool EndWriteCapture(uint generation, bool discardUnread = false)
+        {
+            if (!__captureControl.IsCreated)
+                return false;
+
+            ref var control = ref __captureControl.AsSpan()[0];
+            if (control.isActive == 0 || unchecked((uint)control.generation) != generation)
+                return false;
+
+            if (!discardUnread && (control.outstandingCount != 0 || control.fault != 0))
+                return false;
+
+            control.isActive = 0;
+            for (int i = 0; i < __buffers.Length; ++i)
+            {
+                var buffer = __buffers[i];
+                buffer.ClearCapture();
+                __buffers[i] = buffer;
+            }
+
+            control.outstandingCount = 0;
+            return true;
+        }
+
+        internal bool SetEndWriteCaptureSequenceForTests(uint sequence)
+        {
+            if (!__captureControl.IsCreated || __captureControl[0].isActive == 0)
+                return false;
+
+            __captureControl.AsSpan()[0].sequence = unchecked((int)sequence);
+            return true;
+        }
+
         public bool BeginWrite(int pipelineIndex, out DataStreamWriter writer, ushort capacity = 1024)
         {
             int bufferIndex = pipelineIndex * JobsUtility.MaxJobThreadCount;
@@ -244,29 +579,101 @@ namespace ZG
         {
             BufferIndex bufferIndex;
             bufferIndex.value = (int)writer.m_SendHandleData;
-            __buffers.ElementAt(bufferIndex.value).value.EndWrite(writer);
-            
-            
-            bufferIndex.index = ++__index[0];
+            ref var buffer = ref __buffers.ElementAt(bufferIndex.value);
+            int messageIndex = buffer.value.messageCount;
+            buffer.value.EndWrite(writer);
+            if (buffer.value.messageCount != messageIndex + 1)
+                return;
+
+            __CaptureCommittedEndWrite(
+                ref buffer,
+                messageIndex,
+                ref __captureControl);
+
+            bufferIndex.index = System.Threading.Interlocked.Increment(ref __index.AsSpan()[0]);
             __bufferIndices.Add(bufferIndex);
         }
 
         public void Apply(in NetworkConnection connection, ref NetworkDriver.Concurrent driver)
         {
-            using (var bufferIndices = __bufferIndices.ToNativeArray(Allocator.Temp))
-            {
-                bufferIndices.Sort();
-                
-                foreach (var bufferIndex in bufferIndices)
-                {
-                    ref var buffer = ref __buffers.ElementAt(bufferIndex.value);
-                    buffer.value.Apply(connection, __pipelines[bufferIndex.value / JobsUtility.MaxJobThreadCount], ref driver,
-                        ref buffer.index);
-                }
-            }
+            var wrapper = new DriverWrapper(ref driver);
+            Apply(connection, ref wrapper);
+        }
+
+        internal void Apply<T>(in NetworkConnection connection, ref T driver)
+            where T : struct, INetworkDriver
+        {
+            using var bufferIndices = __bufferIndices.ToNativeArray(Allocator.Temp);
+            bufferIndices.Sort();
 
             __bufferIndices.Clear();
-            __index[0] = 0;
+            bool hasFailure = false;
+            foreach (var bufferIndex in bufferIndices)
+            {
+                ref var buffer = ref __buffers.ElementAt(bufferIndex.value);
+                if (buffer.value.Apply(
+                        connection,
+                        __pipelines[bufferIndex.value / JobsUtility.MaxJobThreadCount],
+                        ref driver,
+                        ref buffer.index))
+                {
+                    continue;
+                }
+
+                hasFailure = true;
+                __bufferIndices.Add(bufferIndex);
+            }
+
+            if (!hasFailure)
+                __index[0] = 0;
+        }
+
+        private static void __CaptureCommittedEndWrite(
+            ref Buffer buffer,
+            int messageIndex,
+            ref NativeArray<EndWriteCaptureControl> captureControl)
+        {
+            if (!captureControl.IsCreated)
+                return;
+
+            ref var control = ref captureControl.AsSpan()[0];
+            if (control.isActive == 0 || control.fault != 0)
+                return;
+
+            if (!buffer.capturePayloads.isCreated || !buffer.captureMetadata.IsCreated)
+            {
+                __SetCaptureFault(ref control, EndWriteCaptureFault.JournalNotCreated);
+                return;
+            }
+
+            int captureMessageCount = buffer.capturePayloads.messageCount;
+            buffer.capturePayloads.Append(buffer.value, messageIndex);
+            if (buffer.capturePayloads.messageCount != captureMessageCount + 1)
+            {
+                __SetCaptureFault(ref control, EndWriteCaptureFault.JournalAppendFailed);
+                return;
+            }
+
+            uint sequence = unchecked((uint)System.Threading.Interlocked.Increment(ref control.sequence));
+            buffer.captureMetadata.Add(new EndWriteCaptureMetadata
+            {
+                sequence = sequence,
+                stamp = control.stamp
+            });
+
+            int outstandingCount = System.Threading.Interlocked.Increment(ref control.outstandingCount);
+            if (outstandingCount < 1)
+                __SetCaptureFault(ref control, EndWriteCaptureFault.SequenceWindowExceeded);
+        }
+
+        private static bool __IsSequenceBefore(uint lhs, uint rhs)
+            => unchecked((int)(lhs - rhs)) < 0;
+
+        private static void __SetCaptureFault(
+            ref EndWriteCaptureControl control,
+            EndWriteCaptureFault fault)
+        {
+            System.Threading.Interlocked.CompareExchange(ref control.fault, (int)fault, 0);
         }
     }
     

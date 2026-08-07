@@ -77,7 +77,24 @@ namespace ZG
         void Awake()
         {
             var world = World.DefaultGameObjectInjectionWorld;
+            if (world == null || !world.IsCreated)
+                return;
+
             var entityManager = world.EntityManager;
+            var systemHandle = world.GetExistingSystem<NetworkRelayServerSystem>();
+
+            // Prefer reusing a live server (Enter Play Mode Options often keep the ECS world /
+            // Listen socket across sessions). Only rebuild when missing or not created.
+            if (systemHandle != default &&
+                entityManager.HasComponent<NetworkRelayServer>(systemHandle))
+            {
+                var existing = entityManager.GetComponentData<NetworkRelayServer>(systemHandle);
+                if (existing.isCreated)
+                    return;
+            }
+
+            // Stale/disposed component: drop it before binding a new Listen socket.
+            __DisposeServerComponent(world, systemHandle);
 
             NetworkRelayServer instance;
             using (var stages = new NativeArray<NetworkPipelineStage>(_stages, Allocator.Temp))
@@ -111,21 +128,49 @@ namespace ZG
 
             instance.Listen(_udpPort, _wsPort, _family);
 
-            entityManager.AddComponentData(world.GetExistingSystem<NetworkRelayServerSystem>(), instance);
+            entityManager.AddComponentData(systemHandle, instance);
         }
 
-        /*void OnDestroy()
+        void OnDestroy()
         {
-            // 强制完成所有 ECS Job
-            var world = World.DefaultGameObjectInjectionWorld;
-            if (world != null && world.IsCreated)
+            try
             {
-                //var system = world.GetExistingSystem<NetworkRelayServerSystem>();
-                world.EntityManager.CompleteAllTrackedJobs();
+                var world = World.DefaultGameObjectInjectionWorld;
+                if (world == null || !world.IsCreated)
+                    return;
+
+                __DisposeServerComponent(world, world.GetExistingSystem<NetworkRelayServerSystem>());
             }
-            
-            if (__instance.isCreated)
-                __instance.Dispose();
-        }*/
+            catch (System.Exception)
+            {
+                // World / system teardown order is not guaranteed on Exit Play Mode.
+            }
+        }
+
+        static void __DisposeServerComponent(World world, SystemHandle systemHandle)
+        {
+            if (systemHandle == default || world == null || !world.IsCreated)
+                return;
+
+            var entityManager = world.EntityManager;
+            if (!entityManager.HasComponent<NetworkRelayServer>(systemHandle))
+                return;
+
+            try
+            {
+                ref var systemState = ref world.Unmanaged.GetExistingSystemState<NetworkRelayServerSystem>();
+                systemState.Dependency.Complete();
+            }
+            catch (System.Exception)
+            {
+                // Best-effort; Dispose still needed to release Listen sockets.
+            }
+
+            var server = entityManager.GetComponentData<NetworkRelayServer>(systemHandle);
+            // Remove before Dispose so NetworkRelayServerSystem.OnDestroy cannot double-free.
+            entityManager.RemoveComponent<NetworkRelayServer>(systemHandle);
+            if (server.isCreated)
+                server.Dispose();
+        }
     }
 }

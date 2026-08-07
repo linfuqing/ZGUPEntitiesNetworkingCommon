@@ -1492,6 +1492,33 @@ namespace ZG
         public int channelCount => __channelIDs.Count();
 
         public int matchCount => __matchIDs.Length;
+
+        /// <summary>
+        /// Burst-safe read view of the match pool after <see cref="Scheduler"/> jobs for this frame.
+        /// Holds NativeList handles (like <see cref="NetworkServerSendBuffer.AsReadOnly"/>) so callers
+        /// can schedule dependent Jobs without Completing ModifyChannels. Do not call
+        /// <c>AsArray()</c> on these lists from the main thread while Server jobs are pending.
+        /// </summary>
+        public struct ReadOnly
+        {
+            [ReadOnly]
+            public NativeList<uint> matchIDs;
+            [ReadOnly]
+            public NativeList<NetworkRelayServerMatch> matches;
+            [ReadOnly]
+            public NativeList<NetworkRelayServerIdentity> identities;
+            public NetworkServerSendBuffer.ReadOnly sendBuffer;
+        }
+
+        public ReadOnly AsReadOnly()
+        {
+            ReadOnly value;
+            value.matchIDs = __matchIDs;
+            value.matches = __matches;
+            value.identities = __identities;
+            value.sendBuffer = __sendBuffer.AsReadOnly();
+            return value;
+        }
         
         public NetworkRelayServer(
             in NetworkSettings settings,

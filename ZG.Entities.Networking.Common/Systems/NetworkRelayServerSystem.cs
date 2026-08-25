@@ -21,8 +21,8 @@ namespace ZG
         [BurstCompile]
         public void OnDestroy(ref SystemState state)
         {
-            if(SystemAPI.TryGetSingleton<NetworkRelayServer>(out var server))
-                server.Dispose();
+            if(SystemAPI.TryGetSingletonRW<NetworkRelayServer>(out var server))
+                server.ValueRW.Dispose();
             
             if(SystemAPI.TryGetSingleton<NetworkRelayServerInjectSingleton>(out var injectSingleton))
                 injectSingleton.Dispose();
@@ -31,11 +31,9 @@ namespace ZG
         [BurstCompile]
         public void OnUpdate(ref SystemState state)
         {
-            var server = SystemAPI.GetSingleton<NetworkRelayServer>();
+            ref var server = ref SystemAPI.GetSingletonRW<NetworkRelayServer>().ValueRW;
             
             state.Dependency = server.Schedule(InnerloopBatchCount, SystemAPI.Time.ElapsedTime, SystemAPI.GetSingleton<NetworkRelayServerInjectSingleton>(), state.Dependency);
-            
-            SystemAPI.SetSingleton(server);
         }
     }
 }

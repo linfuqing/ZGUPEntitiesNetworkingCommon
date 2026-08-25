@@ -1494,6 +1494,14 @@ namespace ZG
         public int matchCount => __matchIDs.Length;
 
         /// <summary>
+        /// Returns send backlog and current delivery-plan counters. Complete the server system
+        /// dependency before calling this from the main thread (the Manager.server accessor already
+        /// does so).
+        /// </summary>
+        public NetworkServerSendBuffer.Diagnostics GetSendDiagnostics() =>
+            __sendBuffer.GetDiagnostics();
+
+        /// <summary>
         /// Burst-safe read view of the match pool after <see cref="Scheduler"/> jobs for this frame.
         /// Holds NativeList handles (like <see cref="NetworkServerSendBuffer.AsReadOnly"/>) so callers
         /// can schedule dependent Jobs without Completing ModifyChannels. Do not call
@@ -1510,7 +1518,7 @@ namespace ZG
             public NetworkServerSendBuffer.ReadOnly sendBuffer;
         }
 
-        public ReadOnly AsReadOnly()
+        public readonly ReadOnly AsReadOnly()
         {
             ReadOnly value;
             value.matchIDs = __matchIDs;
@@ -1523,11 +1531,21 @@ namespace ZG
         public NetworkRelayServer(
             in NetworkSettings settings,
             in NativeArray<NetworkPipelineStageId> stages,
-            in AllocatorManager.AllocatorHandle allocator)
+            in AllocatorManager.AllocatorHandle allocator,
+            int maxPendingSendMessageCountPerConnection =
+                NetworkServerSendBuffer.DefaultMaxPendingMessageCountPerConnection,
+            int maxPendingSendBytesPerConnection =
+                NetworkServerSendBuffer.DefaultMaxPendingBytesPerConnection,
+            int maxPlannedDeliveryWorkPerTick =
+                NetworkServerSendBuffer.DefaultMaxPlannedDeliveryWorkPerTick)
         {
             __instance = new NetworkServer(settings, allocator);
 
-            __sendBuffer = new NetworkServerSendBuffer(allocator);
+            __sendBuffer = new NetworkServerSendBuffer(
+                allocator,
+                maxPendingMessageCountPerConnection: maxPendingSendMessageCountPerConnection,
+                maxPendingBytesPerConnection: maxPendingSendBytesPerConnection,
+                maxPlannedDeliveryCount: maxPlannedDeliveryWorkPerTick);
 
             __channels = new NativeList<NetworkRelayServerChannel>(allocator);
             __identities = new NativeList<NetworkRelayServerIdentity>(allocator);
@@ -1556,10 +1574,22 @@ namespace ZG
         public NetworkRelayServer(
             in NativeArray<NetworkPipelineStage> stages,
             in NetworkSettings settings, 
-            in AllocatorManager.AllocatorHandle allocator)
+            in AllocatorManager.AllocatorHandle allocator,
+            int maxPendingSendMessageCountPerConnection =
+                NetworkServerSendBuffer.DefaultMaxPendingMessageCountPerConnection,
+            int maxPendingSendBytesPerConnection =
+                NetworkServerSendBuffer.DefaultMaxPendingBytesPerConnection,
+            int maxPlannedDeliveryWorkPerTick =
+                NetworkServerSendBuffer.DefaultMaxPlannedDeliveryWorkPerTick)
         {
             using (var stageIDs = stages.ToPipelineStageIDs(Allocator.Temp))
-                this = new NetworkRelayServer(settings, stageIDs, allocator);
+                this = new NetworkRelayServer(
+                    settings,
+                    stageIDs,
+                    allocator,
+                    maxPendingSendMessageCountPerConnection,
+                    maxPendingSendBytesPerConnection,
+                    maxPlannedDeliveryWorkPerTick);
         }
 
         public void Dispose()

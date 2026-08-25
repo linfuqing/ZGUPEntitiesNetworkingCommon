@@ -47,10 +47,13 @@ namespace ZG
 
         public NativeList<NetworkConnection> connectionsToConnect;
         public NativeList<NetworkConnection> connectionsToDisconnect;
+        public NativeList<NetworkConnection> connectionsToClose;
 
         public void Execute()
         {
             sendBuffer.Clear();
+
+            connectionsToClose.Clear();
 
             foreach (var connectionToDisconnect in connectionsToDisconnect)
                 __Disconnect(false, connectionToDisconnect);
@@ -97,6 +100,7 @@ namespace ZG
             }
 
             connectionsToDisconnect.Capacity = math.max(connectionsToDisconnect.Capacity, sendBuffer.connections.Length);
+            connectionsToClose.Capacity = math.max(connectionsToClose.Capacity, sendBuffer.connections.Length);
         }
         
         private void __Disconnect(bool isConnected, in NetworkConnection connection)
@@ -215,9 +219,35 @@ namespace ZG
 
             public NetworkServerSendBuffer.Sender sender;
 
+            public NativeList<NetworkConnection>.ParallelWriter connectionsToClose;
+
             public void Execute(int index)
             {
-                sender.Send(connections[index], pipeline, pipelines, ref driver);
+                var connection = connections[index];
+                if (!sender.Send(connection, pipeline, pipelines, ref driver))
+                    connectionsToClose.AddNoResize(connection);
+            }
+        }
+
+        [BurstCompile]
+        private struct CloseConnections : IJob
+        {
+            public MultiNetworkDriver driver;
+            public NativeList<NetworkConnection> connectionsToClose;
+            public NativeList<NetworkConnection> connectionsToDisconnect;
+
+            public void Execute()
+            {
+                foreach (var connection in connectionsToClose)
+                {
+                    if (driver.GetConnectionState(connection) != NetworkConnection.State.Disconnected)
+                        driver.Disconnect(connection);
+
+                    if (!connectionsToDisconnect.Contains(connection))
+                        connectionsToDisconnect.Add(connection);
+                }
+
+                connectionsToClose.Clear();
             }
         }
 
@@ -226,6 +256,7 @@ namespace ZG
         private MultiNetworkDriver __driver;
         private NativeList<NetworkConnection> __connectionsToConnect;
         private NativeList<NetworkConnection> __connectionsToDisconnect;
+        private NativeList<NetworkConnection> __connectionsToClose;
 
         public bool isCreated => __driver.IsCreated;
 
@@ -239,6 +270,7 @@ namespace ZG
 
             __connectionsToConnect = new NativeList<NetworkConnection>(allocator);
             __connectionsToDisconnect = new NativeList<NetworkConnection>(allocator);
+            __connectionsToClose = new NativeList<NetworkConnection>(allocator);
         }
 
         public void Dispose()
@@ -246,6 +278,7 @@ namespace ZG
             __driver.Dispose();
             __connectionsToConnect.Dispose();
             __connectionsToDisconnect.Dispose();
+            __connectionsToClose.Dispose();
         }
 
         public NetworkPipeline CreatePipeline(in NativeArray<NetworkPipelineStageId> stages)
@@ -311,6 +344,7 @@ namespace ZG
             init.sendBuffer = sendBuffer;
             init.connectionsToConnect = __connectionsToConnect;
             init.connectionsToDisconnect = __connectionsToDisconnect;
+            init.connectionsToClose = __connectionsToClose;
             jobHandle = init.ScheduleByRef(jobHandle);
 
             var connectionList = sendBuffer.connections;
@@ -328,6 +362,8 @@ namespace ZG
             jobHandle = popEvents.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
 
             jobHandle = scheduler.Schedule(jobHandle);
+
+            jobHandle = sendBuffer.ScheduleDeliveryPlan(innerloopBatchCount, jobHandle);
             
             Send send;
             send.pipeline = pipeline;
@@ -335,7 +371,19 @@ namespace ZG
             send.connections = connections;
             send.driver = driver;
             send.sender = sendBuffer.AsSender();
+            send.connectionsToClose = __connectionsToClose.AsParallelWriter();
             jobHandle = send.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
+
+            // The Tick budget is resumable: only after every destination has copied its selected
+            // deliveries into UTP or the persistent retry queue may the corresponding source
+            // prefixes be consumed. Messages beyond this Tick's budget remain in their outboxes.
+            jobHandle = sendBuffer.ScheduleCompleteDeliveryPlan(innerloopBatchCount, jobHandle);
+
+            CloseConnections closeConnections;
+            closeConnections.driver = __driver;
+            closeConnections.connectionsToClose = __connectionsToClose;
+            closeConnections.connectionsToDisconnect = __connectionsToDisconnect;
+            jobHandle = closeConnections.ScheduleByRef(jobHandle);
 
             jobHandle = __driver.ScheduleFlushSend(jobHandle);
             return jobHandle;

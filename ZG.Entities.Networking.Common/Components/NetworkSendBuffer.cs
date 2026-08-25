@@ -52,6 +52,10 @@ namespace ZG
         public bool isCreated => __sizes.IsCreated && __bytes.IsCreated;
 
         public int messageCount => __sizes.IsCreated ? __sizes.Length : 0;
+
+        public int byteCount => __bytes.IsCreated ? __bytes.Length : 0;
+
+        public int byteCapacity => __bytes.IsCreated ? __bytes.Capacity : 0;
         
         public NetworkSendBuffer(in AllocatorManager.AllocatorHandle allocator)
         {
@@ -69,6 +73,83 @@ namespace ZG
         {
             __sizes.Clear();
             __bytes.Clear();
+        }
+
+        /// <summary>
+        /// Releases retry-queue peak capacity after a previously congested destination drains.
+        /// Normal current-Tick sends do not use this persistent buffer.
+        /// </summary>
+        public void Reset()
+        {
+            var allocator = __sizes.Allocator;
+            Dispose();
+            this = new NetworkSendBuffer(allocator);
+        }
+
+        /// <summary>
+        /// Drops the already-sent prefix tracked by <paramref name="index"/> while retaining the
+        /// unsent messages and their backing capacity. This keeps a queue-full retry buffer bounded
+        /// by pending data rather than by all data ever appended to it.
+        /// </summary>
+        public unsafe void Compact(ref int index)
+        {
+            if (index <= 0)
+            {
+                index = 0;
+                return;
+            }
+
+            int messageCount = __sizes.Length;
+            if (index >= messageCount)
+            {
+                Clear();
+                index = 0;
+                return;
+            }
+
+            int byteOffset = __sizes[index - 1];
+            int remainingMessageCount = messageCount - index;
+            int remainingByteCount = __bytes.Length - byteOffset;
+
+            UnsafeUtility.MemMove(__bytes.Ptr, __bytes.Ptr + byteOffset, remainingByteCount);
+            for (int i = 0; i < remainingMessageCount; ++i)
+                __sizes[i] = __sizes[index + i] - byteOffset;
+
+            __sizes.Resize(remainingMessageCount, NativeArrayOptions.UninitializedMemory);
+            __bytes.Resize(remainingByteCount, NativeArrayOptions.UninitializedMemory);
+            index = 0;
+        }
+
+        /// <summary>
+        /// Appends one framed application message when doing so stays inside the caller-provided
+        /// pending queue limits. The payload is copied once into the destination retry queue.
+        /// </summary>
+        public unsafe bool TryAppendMessage(
+            in NativeArray<byte> payload,
+            int maxMessageCount,
+            int maxByteCount)
+        {
+            int payloadLength = payload.Length;
+            if (!payload.IsCreated || payloadLength < 1 || payloadLength > ushort.MaxValue ||
+                maxMessageCount < 1 || maxByteCount < UnsafeUtility.SizeOf<ushort>())
+                return false;
+
+            int destinationMessageCount = __sizes.Length;
+            int destinationByteCount = __bytes.Length;
+            int framedByteCount = UnsafeUtility.SizeOf<ushort>() + payloadLength;
+            if (destinationMessageCount >= maxMessageCount ||
+                destinationByteCount > maxByteCount - framedByteCount)
+                return false;
+
+            int endByteCount = destinationByteCount + framedByteCount;
+            __bytes.Resize(endByteCount, NativeArrayOptions.UninitializedMemory);
+            *(ushort*)(__bytes.Ptr + destinationByteCount) = (ushort)payloadLength;
+            UnsafeUtility.MemCpy(
+                __bytes.Ptr + destinationByteCount + UnsafeUtility.SizeOf<ushort>(),
+                payload.GetUnsafeReadOnlyPtr(),
+                payloadLength);
+            __sizes.Add(endByteCount);
+            return true;
         }
 
         public void Append(in NetworkSendBuffer buffer, int index)

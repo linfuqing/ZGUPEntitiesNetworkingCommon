@@ -1339,8 +1339,6 @@ public struct NetworkServerSendBuffer
     {
         var connectionList = __connections;
         JobHandle jobHandle = inputDeps;
-        try
-        {
 
         CountMemberships countMemberships;
         countMemberships.connections = connectionList.AsDeferredJobArray();
@@ -1425,15 +1423,6 @@ public struct NetworkServerSendBuffer
         sortDestinationSpans.orderedDeliveries = __orderedDeliveries.AsDeferredJobArray();
         jobHandle = sortDestinationSpans.ScheduleByRef(connectionList, innerloopBatchCount, jobHandle);
         return jobHandle;
-        }
-        catch
-        {
-            // A scheduling-time safety failure can occur after an earlier stage has already been
-            // queued. Complete that partial chain before rethrowing so callers may safely dispose
-            // the native state and retain the original exception.
-            jobHandle.Complete();
-            throw;
-        }
     }
 
     /// <summary>
